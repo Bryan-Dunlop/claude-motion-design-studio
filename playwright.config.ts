@@ -10,7 +10,8 @@ export default defineConfig({
   use: {
     baseURL: `http://127.0.0.1:${PORT}`,
     viewport: { width: 1500, height: 950 },
-    launchOptions: { args: ['--force-color-profile=srgb'] },
+    // Same flags as the exporter's Chromium so the test browser rasterises like the export does.
+    launchOptions: { args: ['--force-color-profile=srgb', '--disable-gpu'] },
   },
   webServer: {
     command: 'npx tsx server/dev.ts',

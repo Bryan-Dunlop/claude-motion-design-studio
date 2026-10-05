@@ -1,6 +1,7 @@
 # Motion Studio v2 — design spec
 
-Status: **revised after critique round 1** (UX/product critic). This is the contract that implementation agents build
+Status: **revised after critique round 1** (UX/product critic + feasibility critic, whose experiments live in
+`/tmp/.../scratchpad/critique/feasibility/`). This is the contract that implementation agents build
 against. Principles carried over from v1 (non-negotiable):
 
 - `project.json` (zod) is the single source of truth. Old (v1) files must keep opening.
@@ -39,7 +40,9 @@ New fields (all with defaults):
 Also already in the foundation: Properties panel split into `src/app/components/props/*` with placeholder components,
 "+ Shape ▾" toolbar menu, transition strip in the timeline, first layer + scene = one undo step, store
 `previewRange(start, end)` + `playUntil` (play a range once and stop — for "▶ Preview" buttons), default cursor drop
-shadow, audio assets skipped by the image/font loader, `tests/e2e/exportCompare.ts` helpers, v1 migration tests.
+shadow, audio assets skipped by the image/font loader, `tests/e2e/exportCompare.ts` helpers, v1 migration tests,
+`src/shared/canvas.ts` `createRenderCanvas` / `RENDER_CONTEXT_OPTIONS` (`{alpha:true, willReadFrequently:true}`, used by
+render.html; use it for every offscreen too), Playwright launched with `--disable-gpu` like the exporter.
 
 ---
 
@@ -55,8 +58,18 @@ Owns: `src/shared/renderFrame.ts`, new `src/shared/*` render modules (`effects`,
   type including the cursor). Blur radius, shadow blur and shadow offsets are multiplied by `k` so they shrink/grow with
   the layer (like CSS/After Effects). Offsets stay screen-space (not rotated).
 - `blendMode` → `globalCompositeOperation` (`normal` → `source-over`).
-- `blur > 0` → `ctx.filter = blur(${blur·k}px)`.
+- `blur > 0` → `ctx.filter = blur(${blur·k}px)`. Filters compose as a chain (`blur(a) blur(b)`) when a text unit adds its own.
 - Shadow drawn only when `layer.shadow === true` and `alpha(shadowColor) > 0`.
+- **Clamp resolved values** (spring/bezier easing overshoots, and canvas silently ignores invalid assignments, keeping the
+  previous value): blur, shadowBlur, strokeWidth ≥ 0; alphas to [0,1]; trimStart/trimEnd to [0,1].
+- **Isolation for multi-draw layers** (verified: per-call shadows/blends are wrong — a stroked rect's stroke shadow lands
+  inside its own fill; the default cursor's shadow darkens its own white arrow; per-char shadows differ from whole-line):
+  when an effect is active (shadow on, blur > 0, or blendMode ≠ normal) AND the layer issues more than one draw call
+  (shape with strokeWidth > 0, text with outline or > 1 line or an active animator, cursor, missing-image placeholder),
+  draw the layer with plain source-over / no shadow / no filter / opacity 1 into a scratch canvas (`createRenderCanvas`,
+  bounded to the transformed box + a margin of 3× the blur/shadow extent), then `drawImage` it once at identity with
+  shadow, filter, `globalCompositeOperation` and `globalAlpha` set. Single-draw layers keep the direct path, so v1
+  files (no effects) render exactly as before. Playwright check: a stroked rect with a shadow keeps its fill colour.
 
 **Scene background**: `scene.background` set → fill the whole frame with it before the scene's layers.
 
@@ -69,21 +82,29 @@ Owns: `src/shared/renderFrame.ts`, new `src/shared/*` render modules (`effects`,
   incoming scene transitions in over whatever is underneath (e.g. fades in from the background).
 - `P` is drawn at local time `min(t − P.start, P.duration − 1e-6)` (holds its last frame if it already ended), **without**
   its own transition, and its normal draw is skipped while it is a partner.
-- O and I are rendered to two offscreen canvases (size of `ctx.canvas`, transparent, with the scene's own
-  `background` filled if set). Canvas factory: `res.createCanvas?.(w,h)`, else `OffscreenCanvas`, else
-  `document.createElement('canvas')`. Any pooling must not affect output and O/I must be distinct canvases.
-- Compositing (verified in Chromium 141 — premultiplied dissolve has no mid-point dip and keeps transparent areas
-  transparent so lower scenes still show):
-  - **dissolve(O, I, p)** = temp canvas: draw O with `globalAlpha = 1−p`, then I with `globalCompositeOperation='lighter'`,
-    `globalAlpha = p`; draw temp onto the frame.
-  - `fade` = dissolve(O, I, p).
-  - `slide` (Slide over): I translated in from the edge along the travel direction by `(1−p)·W` (or H); O clipped to the
-    part of the frame I has not covered yet.
-  - `push`: O translated by `−p·W`, I by `(1−p)·W` (same axis/sign rules), no clipping.
-  - `wipe`: O clipped to the not-yet-wiped region, I clipped to the wiped region (edge moves along the travel direction).
-  - `zoom`: dissolve(O, I′, p) where I′ = I scaled `1.25 → 1` about the frame centre.
-  - `blur`: dissolve(O blurred `p·B`, I blurred `(1−p)·B`, p), `B = 3%` of the long edge × scale.
+- **Compositing** (revised after experiments: bitmap translate/scale softens text, transparent offscreens break blend
+  modes, blurred full frames get transparent edges):
+  - Transition geometry is always applied **at draw time as a vector transform** (`ctx.translate` / scale about the
+    centre / `ctx.clip`) before drawing a scene's background + layers. Offscreens are only ever composited with
+    `drawImage(canvas, 0, 0)` at the identity transform — never translated or scaled as bitmaps.
+  - `slide` / `push` / `wipe`: **no offscreens** — draw P and S directly onto the frame with translate/clip, so blend
+    modes see the real backdrop and text stays vector. slide: S translated in from the edge by `(1−p)·W` (or H) along the
+    travel direction and clipped to the region it covers, P clipped to the region not yet covered. push: P translated by
+    `−p·W`, S by `(1−p)·W`. wipe: P clipped to the not-yet-wiped region, S to the wiped region.
+  - `fade` / `zoom` / `blur`: render **backdrop-inclusive, opaque** O′ and I′: each offscreen (`createRenderCanvas`, size
+    of `ctx.canvas`) first receives a copy of the frame so far (project background + scenes drawn earlier in array
+    order), then P's (resp. S's) background + layers; for zoom, I′'s layers are drawn under a vector scale `1.25 → 1`
+    about the frame centre. Then **dissolve**: temp ← O′ with `globalAlpha 1−p`, then I′ with
+    `globalCompositeOperation 'lighter'`, `globalAlpha p` (with opaque inputs this is an exact cross-fade, no mid-point dip);
+    draw temp at identity over the frame. Lower scenes still show because they are baked into O′/I′.
+  - `blur` style: O′ blurred `p·B`, I′ blurred `(1−p)·B`, `B = 3%` of the long edge × scale. Render each into a canvas
+    **padded by `m = ceil(3·radius)`** on every side, filled with `scene.background ?? project.background` before the
+    backdrop/layers are drawn at offset `(m, m)`; blur; composite with `drawImage(src, m, m, W, H, 0, 0, W, H)`, so
+    edges don't fade to transparent. (Cost ≈ 430 ms/frame at 4K during the window; acceptable.)
   - Direction = direction of travel: `left` = moves right→left (enters from the right edge).
+  - All offscreens/scratch canvases come from `createRenderCanvas` (src/shared/canvas.ts, `{alpha:true,
+    willReadFrequently:true}` → grayscale text AA everywhere) or `res.createCanvas` when injected by tests. Any pooling
+    must not affect output; canvases used at the same time must be distinct.
 - Unit tests: composite at `p→0` equals O alone and at `p→1` equals I alone (within 1/255); partner selection cases
   (sequential, overlapping, gap, long overlay scene, tie).
 
@@ -115,7 +136,11 @@ Owns: `src/shared/renderFrame.ts`, new `src/shared/*` render modules (`effects`,
   (`y − e·distance`), drop-out further down, scale-out shrinks `1 → 0`, blur-out blurs `0 → distance`, typewriter-out
   hides a unit once `v > 0`. Order describes the exit sequence too (forward = first unit leaves first).
 - Units: `char` (grapheme via `Intl.Segmenter`, fallback `Array.from`), `word` (whitespace-separated; trailing spaces stay
-  with the word), `line`. Unit x = `measureText(prefix of line)` with the same font + letterSpacing. `layerBox` unchanged.
+  with the word), `line`. **Unit x = `measureText(prefix + unit).width − measureText(unit).width`** on its line (same
+  font, letterSpacing, kerning) — this keeps the kern pair before the unit (verified 0 px difference vs whole-line
+  `fillText` for 'AVATAR Type Wave'; the naive `measureText(prefix)` is off by up to 9 px). Char units break
+  ligatures/contextual alternates while animating (documented limitation). `layerBox` unchanged.
+- When in and out spans overlap on a short layer: visibility = `e_in · (1 − e_out)`, `outStart` clamped ≥ 0.
 - Ranks: forward `i`; reverse `n−1−i`; center = rank by `|i − (n−1)/2|` (ties left first); edges = reverse of center;
   random = seeded permutation (mulberry32 `seed`).
 - Effects: fade (alpha), rise (y `+(1−e)·distance` in, alpha), drop (y `−(1−e)·distance` in, alpha), scale (about unit
@@ -142,9 +167,11 @@ Owns: `src/shared/renderFrame.ts`, new `src/shared/*` render modules (`effects`,
   `w/2`,`h/2`); star (`points` tips, inner radius `innerRadius × outer`); line `(0,h/2)→(w,h/2)`, stroke only.
 - Path start points and direction (clockwise on screen): rect starts at the top edge just after the top-left corner
   radius; **ellipse starts at 12 o'clock**; polygon/star/triangle start at vertex 0 (top); line starts at the left end.
-- Trim (stroke only): exact length `L` (rounded rect `2(w+h) − 8r + 2πr`; ellipse Ramanujan II; others exact).
-  `v = (trimEnd − trimStart)·L`; `setLineDash([v, L − v])`, `lineDashOffset = −(trimStart + trimOffset)·L` (wraps);
-  `v ≤ 0` → no stroke; `v ≥ L` → solid. (Feasibility critic will confirm the dash/wrap maths on native arcs.)
+- Trim (stroke only): exact length `L` (rounded rect with the **clamped** radius `rr = min(r, w/2, h/2)`:
+  `2(w+h) − 8rr + 2π·rr`; ellipse Ramanujan II; others exact). `v = (trimEnd − trimStart)·L` (clamped);
+  `setLineDash([v, L − v])`, `lineDashOffset = −(((trimStart + trimOffset) % 1 + 1) % 1)·L` (wrap in JS — Skia keeps the
+  dash phase in float32); `v ≤ 0` → no stroke; `v ≥ L` → solid. Verified on native arcs/rounded rects in Chromium:
+  ellipse drawn from −π/2 starts at 12 o'clock clockwise, wraps are continuous. Unit test a pill (r > h/2).
 - Linear gradient (`fillMode: 'linear'`) for shape fill and text: through the box centre at `gradientAngle`, half-length
   `(|w cosθ| + |h sinθ|)/2`, stops 0 = `fill`/`color`, 1 = `gradientTo`. When the user switches to Gradient and
   `gradientTo` equals the base colour, set `gradientTo` to the base mixed 45% toward black (luminance > 0.5) or white.
@@ -175,8 +202,12 @@ Owns: `src/app/**` except lane A's props files, `src/app/components/props/{Audio
 
 ### B1. Audio
 
-- Import `.mp3 .wav .ogg .m4a .aac .flac` (byte-for-byte). Duration via `OfflineAudioContext.decodeAudioData`.
-  Update the file-input `accept`, the Import tooltip, the drop hint and the Relink `accept` to include audio.
+- Import `.mp3 .wav .ogg .m4a .aac .flac` (byte-for-byte). Duration + waveform peaks via a low-rate
+  `new OfflineAudioContext(1, 1, 8000).decodeAudioData` (5-min MP3: 0.8 s / 19 MB instead of 1.5 s / 115 MB). Playwright's
+  Chromium cannot decode AAC (.m4a/.aac), so on decode failure fall back to a server endpoint that decodes with ffmpeg
+  (sample count → duration, plus peaks); don't use ffprobe's format duration (wrong for ADTS/MP3). Preview playback of a
+  format the browser can't decode shows a toast ("can't preview this format in this browser — the export will include
+  it"). Update the file-input `accept`, the Import tooltip, the drop hint and the Relink `accept` to include audio.
 - **New clip defaults**: `start = 0` if the file is at least as long as the project (music), else the playhead (SFX);
   `duration = min(asset − trimStart, projectDuration − start)`; if shortened to fit, `fadeOut = min(1.5, duration/4)`;
   `fadeIn 0`, `volume 1`. Toast: `Added music.mp3 at 0:00 — see the Audio rows`.
@@ -192,10 +223,26 @@ Owns: `src/app/**` except lane A's props files, `src/app/components/props/{Audio
 - Click sounds: cursor clicks drawn as ● markers on the cursor layer's timeline row (absolute time); clips can be
   duplicated with Ctrl+D (at the playhead); audio assets in the Assets list get a `+ at playhead` button; the Cursor
   panel gets an optional `Click sound` asset picker that creates/updates one clip per click (one undo step).
-- Export: `server/audioMix.ts` builds ffmpeg inputs + `filter_complex` (exact command to be confirmed by the
-  feasibility critic): per clip `atrim → asetpts → aformat 48k stereo → volume → afade in/out → adelay`, then
-  `amix normalize=0`, pad/trim to the project duration → AAC 192k 48 kHz. No audible clips → no audio stream. Missing
-  audio files are skipped with a warning shown in the export dialog. CLI the same.
+- Export (`server/audioMix.ts` `buildAudioArgs`), **exact command verified on ffmpeg 6.1.1** (the spec's first version put
+  audio 0.48 s early because adelay emits NOPTS timestamps, and could hang forever on an empty clip):
+  ```
+  ffmpeg -y -loglevel error -f rawvideo -pix_fmt rgba -s WxH -r FPS -i - -i clip0 -i clip1 …
+    -filter_complex "[1:a]atrim=start=TS:duration=DUR,asetpts=PTS-STARTPTS,aformat=sample_rates=48000:channel_layouts=stereo,volume=V[,afade=t=in:st=0:d=FI][,afade=t=out:st=OS:d=FO],adelay=START_MS:all=1[c0];…;
+                     [c0][c1]…amix=inputs=n:normalize=0:duration=longest,asetpts=N/SR/TB,apad=whole_len=NS,atrim=end_sample=NS[aout]"
+    -map 0:v -map "[aout]" <existing -vf / libx264 args> -c:a aac -b:a 192k -ar 48000 -movflags +faststart out.mp4
+  ```
+  with `NS = round(frameCount/fps · 48000)` (the **video** length, not durationSec).
+  - Skip a clip when muted, volume = 0, `start ≥ frameCount/fps`, its asset file is missing, or `trimStart ≥ asset.duration − 1e-3`.
+  - `DUR = min(duration, asset.duration − trimStart, frameCount/fps − start)`; `FI = min(fadeIn, DUR)`, `FO = min(fadeOut, DUR)`;
+    emit an afade only when its value > 0 (`d=0` is NOT "no fade" — it defaults to 44100 samples); `OS = max(0, DUR − FO)`.
+    `planAudio` applies the same clamping so preview == export.
+  - No audible clips → no audio stream. Missing audio files are skipped with a warning on the job, shown in the dialog.
+  - Exporter watchdog: after `stdin.end()`, if ffmpeg hasn't exited within 30 s, SIGKILL it and fail the job (SIGTERM is
+    ignored in the hang case).
+  - Tests: a `buildAudioArgs` table test (clip at 0, clip after the end → skipped, trimStart ≥ duration → skipped, fade >
+    length → clamped, zero fades → no afade, single clip, non-integer durationSec·fps → pad uses frameCount/fps) plus a real
+    export asserting audio `start_time = 0`, audio duration == video duration, and RMS windows matching clip placement,
+    trim and fades. CLI the same.
 
 ### B2. Timeline & preview UX
 
@@ -231,7 +278,10 @@ Owns: `src/app/**` except lane A's props files, `src/app/components/props/{Audio
   check)`), `Quality` (`Best (larger file)` CRF 16 / `Good` CRF 20 / `Draft (fastest)` CRF 26 + `veryfast`),
   `Include audio` (checked when clips exist; disabled with "No audio clips" otherwise). Remember choices in localStorage.
   Output name `${name}-${W}x${H}-${stamp}.mp4`. CLI flags `--scale`, `--crf`, `--no-audio`. Options validated with zod.
-- `PNG` button: current frame at full project resolution via renderFrame in the editor, named `${name}-${W}x${H}-frame${n}.png`.
+  Scaled size: compute `outW/outH` once (even-rounded `W·s`, `H·s`), render with `scale = max(outW/W, outH/H)` (≤ 1 px crop,
+  never an unpainted edge), and carry `outW/outH` on the job for `acceptFrame`'s byte check and ffmpeg's `-s`.
+- `PNG` button: current frame at full project resolution via renderFrame in the editor on a `createRenderCanvas` canvas
+  (same text AA as the export), named `${name}-${W}x${H}-frame${n}.png`.
 - **Make a copy in another format**: `src/shared/fitToFrame.ts` `fitToFrame(project, W2, H2)`: `k = min(W2/W, H2/H)`,
   `x' = W2/2 + k·(x − W/2)` (same for y) for layer x/y, their keyframe values and cursor points; layer `scale ×k`
   (and scale keyframes); effects follow via the layer-scale factor. Project settings → `Make a copy in another format…`

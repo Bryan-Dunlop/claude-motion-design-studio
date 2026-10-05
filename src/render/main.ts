@@ -1,6 +1,7 @@
 // Render-only page (no editor UI). Used by headless Chromium for export, and by tests.
 import '../shared/fonts';
 import { assetUrl } from '../shared/assetUrl';
+import { RENDER_CONTEXT_OPTIONS } from '../shared/canvas';
 import { loadResources } from '../shared/loadResources';
 import { frameCount, frameTime, renderFrame } from '../shared/renderFrame';
 import { ProjectSchema, type Project } from '../shared/schema';
@@ -13,7 +14,8 @@ function makeCanvas(w: number, h: number) {
   canvas.width = w;
   canvas.height = h;
   document.body.appendChild(canvas);
-  const ctx = canvas.getContext('2d', { willReadFrequently: true, alpha: false })!;
+  // Same context options as every other render canvas (see src/shared/canvas.ts).
+  const ctx = canvas.getContext('2d', RENDER_CONTEXT_OPTIONS)!;
   return { canvas, ctx };
 }
 

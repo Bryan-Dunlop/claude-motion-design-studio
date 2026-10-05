@@ -1,8 +1,8 @@
-import { emptyProject, ProjectSchema, type Project } from '../../src/shared/schema';
+import { emptyProject, ProjectSchema, type Project, type ProjectInput } from '../../src/shared/schema';
 
 /** Small 1080p project with animated text and a cursor (no assets). */
 export function sampleProject(): Project {
-  const p = emptyProject();
+  const p: ProjectInput = emptyProject();
   p.settings = { ...p.settings, width: 1920, height: 1080 };
   p.scenes.push({
     id: 's1', name: 'Scene 1', start: 0, duration: 15,

@@ -158,3 +158,5 @@ pre { white-space: pre-wrap; margin: 0; }
 .toasts { position: fixed; bottom: 250px; right: 14px; display: flex; flex-direction: column; gap: 6px; z-index: 60; }
 .toast { background: #2b2e36; border: 1px solid var(--line); padding: 8px 12px; border-radius: 6px; max-width: 380px; cursor: pointer; }
 .toast.error { border-color: var(--danger); color: #ffd0d0; }
+
+.transition-strip { position: absolute; left: 0; top: 0; bottom: 0; pointer-events: none; background: repeating-linear-gradient(135deg, #ffffff33 0 4px, transparent 4px 8px); border-right: 1px solid #ffffff66; }

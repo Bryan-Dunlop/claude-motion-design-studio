@@ -1,8 +1,9 @@
 // Single source of truth for the project file format (project.json).
 // Every load/save goes through ProjectSchema.parse so bad files fail loudly.
+// Older schema versions are migrated on parse (see migrateProject); new fields carry zod defaults so old data fills in.
 import { z } from 'zod';
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const EasingSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('linear') }),
@@ -40,6 +41,13 @@ export const KeyframeSchema = z.object({
 });
 export type Keyframe = z.infer<typeof KeyframeSchema>;
 
+export const BLEND_MODES = [
+  'normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 'color-dodge', 'color-burn',
+  'hard-light', 'soft-light', 'difference', 'exclusion', 'hue', 'saturation', 'color', 'luminosity',
+] as const;
+export const BlendModeSchema = z.enum(BLEND_MODES);
+export type BlendMode = z.infer<typeof BlendModeSchema>;
+
 const LayerBase = {
   id: z.string(),
   name: z.string(),
@@ -58,7 +66,34 @@ const LayerBase = {
   opacity: z.number().min(0).max(1),
   /** Property name -> keyframes (sorted by time). */
   keyframes: z.record(z.string(), z.array(KeyframeSchema)),
+  // ---- effects (v2) — sizes in project pixels
+  blur: z.number().min(0).default(0),
+  shadowColor: z.string().default('#00000000'),
+  shadowBlur: z.number().min(0).default(0),
+  /** Screen-space offset (not rotated with the layer). */
+  shadowOffsetX: z.number().default(0),
+  shadowOffsetY: z.number().default(0),
+  blendMode: BlendModeSchema.default('normal'),
 };
+
+export const FillModeSchema = z.enum(['solid', 'linear']);
+
+export const TextAnimSchema = z.object({
+  unit: z.enum(['char', 'word', 'line']),
+  effect: z.enum(['fade', 'rise', 'drop', 'scale', 'typewriter', 'blur']),
+  order: z.enum(['forward', 'reverse', 'center', 'edges', 'random']),
+  /** Seconds between consecutive units. */
+  stagger: z.number().min(0),
+  /** Seconds each unit takes. */
+  duration: z.number().positive(),
+  /** In: seconds after the layer starts. Out: seconds before the layer ends. */
+  delay: z.number().min(0),
+  /** Pixels for rise/drop/blur. */
+  distance: z.number(),
+  easing: EasingSchema,
+  seed: z.number().int(),
+});
+export type TextAnim = z.infer<typeof TextAnimSchema>;
 
 export const TextLayerSchema = z.object({
   ...LayerBase,
@@ -71,6 +106,14 @@ export const TextLayerSchema = z.object({
   letterSpacing: z.number(),
   align: z.enum(['left', 'center', 'right']),
   color: z.string(),
+  fillMode: FillModeSchema.default('solid'),
+  gradientTo: z.string().default('#ffffff'),
+  /** Degrees. 0 = left→right, 90 = top→bottom. */
+  gradientAngle: z.number().default(90),
+  stroke: z.string().default('#000000'),
+  strokeWidth: z.number().min(0).default(0),
+  textIn: TextAnimSchema.nullable().default(null),
+  textOut: TextAnimSchema.nullable().default(null),
 });
 
 export const ImageLayerSchema = z.object({
@@ -81,16 +124,32 @@ export const ImageLayerSchema = z.object({
   height: z.number().positive(),
 });
 
+export const SHAPE_KINDS = ['rect', 'ellipse', 'triangle', 'star', 'polygon', 'line'] as const;
+export const ShapeKindSchema = z.enum(SHAPE_KINDS);
+export type ShapeKind = z.infer<typeof ShapeKindSchema>;
+
 export const ShapeLayerSchema = z.object({
   ...LayerBase,
   type: z.literal('shape'),
-  shape: z.enum(['rect', 'ellipse']),
+  shape: ShapeKindSchema,
   width: z.number().positive(),
   height: z.number().positive(),
   cornerRadius: z.number().min(0),
   fill: z.string(),
   stroke: z.string(),
   strokeWidth: z.number().min(0),
+  /** Star tips / polygon sides. */
+  points: z.number().int().min(3).max(64).default(5),
+  /** Star inner radius as a fraction of the outer radius. */
+  innerRadius: z.number().min(0).max(1).default(0.45),
+  fillMode: FillModeSchema.default('solid'),
+  gradientTo: z.string().default('#ffffff'),
+  gradientAngle: z.number().default(90),
+  /** Trim paths (stroke only): visible part of the outline, as fractions of its length. */
+  trimStart: z.number().min(0).max(1).default(0),
+  trimEnd: z.number().min(0).max(1).default(1),
+  trimOffset: z.number().default(0),
+  lineCap: z.enum(['butt', 'round', 'square']).default('round'),
 });
 
 export const CursorPointSchema = z.object({
@@ -122,12 +181,25 @@ export const LayerSchema = z.discriminatedUnion('type', [
   CursorLayerSchema,
 ]);
 export type Layer = z.infer<typeof LayerSchema>;
+export type LayerInput = z.input<typeof LayerSchema>;
 export type TextLayer = z.infer<typeof TextLayerSchema>;
 export type ImageLayer = z.infer<typeof ImageLayerSchema>;
 export type ShapeLayer = z.infer<typeof ShapeLayerSchema>;
 export type CursorLayer = z.infer<typeof CursorLayerSchema>;
 export type CursorPoint = z.infer<typeof CursorPointSchema>;
 export type LayerType = Layer['type'];
+
+export const TransitionSchema = z.object({
+  type: z.enum(['none', 'fade', 'slide', 'push', 'wipe', 'zoom', 'blur']),
+  /** Seconds, at the start of the scene. */
+  duration: z.number().positive(),
+  /** Direction of travel of the incoming scene (slide/push/wipe). */
+  direction: z.enum(['left', 'right', 'up', 'down']),
+  easing: EasingSchema,
+});
+export type Transition = z.infer<typeof TransitionSchema>;
+
+export const defaultTransition = (): Transition => ({ type: 'none', duration: 0.6, direction: 'left', easing: { type: 'easeInOut' } });
 
 export const SceneSchema = z.object({
   id: z.string(),
@@ -137,23 +209,46 @@ export const SceneSchema = z.object({
   duration: z.number().positive(),
   /** Array order = z-order (first is drawn first, i.e. at the back). */
   layers: z.array(LayerSchema),
+  /** null = show the project background. */
+  background: z.string().nullable().default(null),
+  transition: TransitionSchema.default(defaultTransition),
 });
 export type Scene = z.infer<typeof SceneSchema>;
+export type SceneInput = z.input<typeof SceneSchema>;
 
 export const AssetSchema = z.object({
   id: z.string(),
   originalName: z.string(),
   /** Path inside the project folder, e.g. assets/1a2b3c4d-logo.png */
   relativePath: z.string(),
-  type: z.enum(['image', 'svg', 'font']),
+  type: z.enum(['image', 'svg', 'font', 'audio']),
   /** sha256 of the original bytes. */
   hash: z.string(),
   /** For fonts: the CSS family name registered for this file. */
   fontFamily: z.string().optional(),
   width: z.number().optional(),
   height: z.number().optional(),
+  /** For audio: length in seconds. */
+  duration: z.number().optional(),
 });
 export type Asset = z.infer<typeof AssetSchema>;
+
+export const AudioClipSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  assetId: z.string(),
+  /** Seconds from project start. */
+  start: z.number().min(0),
+  /** Seconds skipped at the beginning of the source file. */
+  trimStart: z.number().min(0),
+  duration: z.number().positive(),
+  /** Linear gain: 1 = original level. */
+  volume: z.number().min(0).max(4),
+  fadeIn: z.number().min(0),
+  fadeOut: z.number().min(0),
+  muted: z.boolean(),
+});
+export type AudioClip = z.infer<typeof AudioClipSchema>;
 
 export const SettingsSchema = z.object({
   durationSec: z.number().positive().max(3600),
@@ -165,13 +260,25 @@ export const SettingsSchema = z.object({
 });
 export type Settings = z.infer<typeof SettingsSchema>;
 
-export const ProjectSchema = z.object({
+export const ProjectV2Schema = z.object({
   schemaVersion: z.literal(SCHEMA_VERSION),
   settings: SettingsSchema,
   scenes: z.array(SceneSchema),
   assets: z.array(AssetSchema),
+  audio: z.array(AudioClipSchema).default(() => []),
 });
-export type Project = z.infer<typeof ProjectSchema>;
+
+/** Bring older project files up to the current schemaVersion. New fields are filled in by zod defaults. */
+export function migrateProject(data: unknown): unknown {
+  if (!data || typeof data !== 'object') return data;
+  const d = data as { schemaVersion?: unknown };
+  if (d.schemaVersion === 1) return { ...d, schemaVersion: 2 };
+  return data;
+}
+
+export const ProjectSchema = z.preprocess(migrateProject, ProjectV2Schema);
+export type Project = z.infer<typeof ProjectV2Schema>;
+export type ProjectInput = z.input<typeof ProjectV2Schema>;
 
 export const ASPECTS: Record<Exclude<Settings['aspect'], 'custom'>, [number, number]> = {
   '16:9': [16, 9],
@@ -193,13 +300,19 @@ export function emptyProject(): Project {
     },
     scenes: [],
     assets: [],
+    audio: [],
   };
 }
 
+const EFFECTS = ['blur', 'shadowColor', 'shadowBlur', 'shadowOffsetX', 'shadowOffsetY'];
+
 /** Properties that can carry keyframes, per layer type. */
 export const ANIMATABLE: Record<LayerType, string[]> = {
-  text: ['x', 'y', 'scale', 'rotation', 'opacity', 'fontSize', 'letterSpacing', 'color'],
-  image: ['x', 'y', 'scale', 'rotation', 'opacity'],
-  shape: ['x', 'y', 'scale', 'rotation', 'opacity', 'width', 'height', 'cornerRadius', 'fill'],
-  cursor: ['opacity', 'scale'],
+  text: ['x', 'y', 'scale', 'rotation', 'opacity', 'fontSize', 'letterSpacing', 'color', 'gradientTo', 'gradientAngle', 'stroke', 'strokeWidth', ...EFFECTS],
+  image: ['x', 'y', 'scale', 'rotation', 'opacity', 'width', 'height', ...EFFECTS],
+  shape: [
+    'x', 'y', 'scale', 'rotation', 'opacity', 'width', 'height', 'cornerRadius', 'fill',
+    'innerRadius', 'trimStart', 'trimEnd', 'trimOffset', 'stroke', 'strokeWidth', 'gradientTo', 'gradientAngle', ...EFFECTS,
+  ],
+  cursor: ['opacity', 'scale', ...EFFECTS],
 };

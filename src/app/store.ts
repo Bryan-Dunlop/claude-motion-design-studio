@@ -11,6 +11,8 @@ const HISTORY_LIMIT = 300;
 export interface Selection {
   sceneId: string | null;
   layerIds: string[];
+  /** Selected audio clips (project.audio ids). Selecting layers should clear this and vice versa. */
+  audioIds: string[];
 }
 
 export interface Toast {
@@ -70,7 +72,7 @@ export const useEditor = create<EditorState>((set, get) => {
     playing: false,
     loop: false,
     zoom: 60,
-    selection: { sceneId: null, layerIds: [] },
+    selection: { sceneId: null, layerIds: [], audioIds: [] },
     missingAssets: new Set(),
     toasts: [],
 
@@ -121,7 +123,7 @@ export const useEditor = create<EditorState>((set, get) => {
         gestureBase: null,
         time: 0,
         playing: false,
-        selection: { sceneId: project.scenes[0]?.id ?? null, layerIds: [] },
+        selection: { sceneId: project.scenes[0]?.id ?? null, layerIds: [], audioIds: [] },
       }),
     markSaved: (project, name) => set({ savedProject: project, projectName: name }),
 
@@ -148,8 +150,10 @@ function fixSelection(set: (s: Partial<EditorState>) => void, get: () => EditorS
   const scene = project.scenes.find((s) => s.id === selection.sceneId) ?? null;
   const ids = new Set(project.scenes.flatMap((s) => s.layers.map((l) => l.id)));
   const layerIds = selection.layerIds.filter((id) => ids.has(id));
-  if ((scene?.id ?? null) !== selection.sceneId || layerIds.length !== selection.layerIds.length) {
-    set({ selection: { sceneId: scene?.id ?? null, layerIds } });
+  const clipIds = new Set(project.audio.map((c) => c.id));
+  const audioIds = selection.audioIds.filter((id) => clipIds.has(id));
+  if ((scene?.id ?? null) !== selection.sceneId || layerIds.length !== selection.layerIds.length || audioIds.length !== selection.audioIds.length) {
+    set({ selection: { sceneId: scene?.id ?? null, layerIds, audioIds } });
   }
 }
 

@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { applyPreset, DEFAULT_PRESET, seededRandom, staggerStarts } from '../../src/shared/presets';
 import { sampleKeyframes } from '../../src/shared/interpolate';
+import { makeLayer } from '../../src/shared/factories';
 import type { ShapeLayer } from '../../src/shared/schema';
 
-const layer = (): ShapeLayer => ({
+const layer = (): ShapeLayer =>
+  makeLayer({
   id: 'l1', name: 'S', type: 'shape', visible: true, locked: false, start: 0, duration: 4,
   anchorX: 0.5, anchorY: 0.5, x: 500, y: 300, scale: 1, rotation: 0, opacity: 1, keyframes: {},
   shape: 'rect', width: 100, height: 50, cornerRadius: 0, fill: '#ff0000', stroke: '#000000', strokeWidth: 0,
-});
+  });
 
 describe('presets', () => {
   it('fade in generates regular keyframes from 0 to the layer opacity', () => {

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { frameCount } from '../shared/renderFrame';
+import type { ShapeKind } from '../shared/schema';
 import { addCursor, addScene, addShape, addText, deleteLayers, downloadZip, duplicateLayers, importFiles, importZip, newProject, saveProject } from './actions';
 import { ExportDialog, OpenDialog, SaveAsDialog } from './components/Dialogs';
 import { LayersPanel } from './components/LayersPanel';
@@ -11,7 +12,16 @@ import { isDirty, snapToFrame, useEditor } from './store';
 
 type DialogKind = 'open' | 'saveAs' | 'export' | null;
 
-const NOT_AVAILABLE = ['Audio', 'Video clips', 'Scene transitions', 'Blur / effects', 'AI generation', 'Cloud sync'];
+const NOT_AVAILABLE = ['Video clips', 'AI generation', 'Cloud sync'];
+
+const SHAPE_MENU: { kind: ShapeKind; label: string }[] = [
+  { kind: 'rect', label: 'Rectangle' },
+  { kind: 'ellipse', label: 'Ellipse' },
+  { kind: 'triangle', label: 'Triangle' },
+  { kind: 'star', label: 'Star' },
+  { kind: 'polygon', label: 'Polygon' },
+  { kind: 'line', label: 'Line' },
+];
 
 function formatTime(t: number) {
   const m = Math.floor(t / 60);
@@ -124,7 +134,24 @@ export function App() {
           <button onClick={addScene} title="Add a scene">+ Scene</button>
           <button onClick={addText} title="Add a text layer" data-testid="add-text">+ Text</button>
           <button onClick={() => addShape('rect')} title="Add a rectangle" data-testid="add-rect">+ Rect</button>
-          <button onClick={() => addShape('ellipse')} title="Add an ellipse">+ Ellipse</button>
+          <details className="na-menu shape-menu">
+            <summary title="Add a shape layer" data-testid="add-shape-menu">+ Shape ▾</summary>
+            <div className="na-list">
+              {SHAPE_MENU.map((s) => (
+                <button
+                  key={s.kind}
+                  data-testid={`add-shape-${s.kind}`}
+                  title={`Add a ${s.label.toLowerCase()}`}
+                  onClick={(e) => {
+                    addShape(s.kind);
+                    (e.currentTarget.closest('details') as HTMLDetailsElement).open = false;
+                  }}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          </details>
           <button onClick={addCursor} title="Add an animated mouse cursor with click ripples" data-testid="add-cursor">+ Cursor</button>
           <button onClick={() => fileInput.current?.click()} title="Import PNG, JPG, WebP, SVG or fonts (you can also drag files onto the preview)" data-testid="btn-import">
             Import asset…

@@ -162,6 +162,14 @@ export function Timeline() {
                   title={`${s.name}: ${s.start.toFixed(2)}s → ${(s.start + s.duration).toFixed(2)}s. Drag to move, drag edges to change length.`}
                   data-testid={`scene-block-${s.name}`}
                 >
+                  {s.transition.type !== 'none' && (
+                    <div
+                      className="transition-strip"
+                      style={{ width: Math.min(s.transition.duration, s.duration) * zoom }}
+                      title={`Transition in: ${s.transition.type}, ${Math.min(s.transition.duration, s.duration).toFixed(2)}s`}
+                      data-testid={`transition-strip-${s.name}`}
+                    />
+                  )}
                   <div className="edge left" onPointerDown={(e) => dragScene(e, s, 'start')} />
                   <span>{s.name}</span>
                   <div className="edge right" onPointerDown={(e) => dragScene(e, s, 'end')} />

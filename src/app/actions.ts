@@ -2,7 +2,8 @@
 import type { Draft } from 'immer';
 import { assetUrl } from '../shared/assetUrl';
 import { makeId } from '../shared/presets';
-import { ASPECTS, emptyProject, ProjectSchema, type Asset, type Layer, type Project, type Scene, type Settings } from '../shared/schema';
+import { makeLayer, makeScene } from '../shared/factories';
+import { ASPECTS, emptyProject, ProjectSchema, type Asset, type Layer, type Project, type Scene, type Settings, type ShapeKind } from '../shared/schema';
 import { deepCloneLayer, findLayer, useEditor } from './store';
 
 const S = () => useEditor.getState();
@@ -23,26 +24,33 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
 
 // ---------------------------------------------------------------- scenes
 
-export function addScene() {
-  const { project, time } = S();
-  const id = makeId('scene');
+/** A new, empty scene placed after the last one (or covering the whole project if it is the first). */
+function newScene(project: Project): Scene {
   const lastEnd = Math.max(0, ...project.scenes.map((s) => s.start + s.duration));
   const start = project.scenes.length === 0 ? 0 : Math.min(lastEnd, Math.max(0, project.settings.durationSec - 1));
   const duration = Math.max(1, project.scenes.length === 0 ? project.settings.durationSec : Math.min(5, project.settings.durationSec - start));
-  S().commit((d) => {
-    d.scenes.push({ id, name: `Scene ${d.scenes.length + 1}`, start, duration, layers: [] });
-  });
-  S().select({ sceneId: id, layerIds: [] });
-  if (time < start || time >= start + duration) S().setTime(start);
-  return id;
+  return makeScene({ id: makeId('scene'), name: `Scene ${project.scenes.length + 1}`, start, duration, layers: [] });
 }
 
-/** Scene to add layers to: the selected one, else the one under the playhead, else a new one. */
-function targetScene(): string {
+function showScene(scene: Scene) {
+  const { time } = S();
+  if (time < scene.start || time >= scene.start + scene.duration) S().setTime(scene.start);
+}
+
+export function addScene() {
+  const scene = newScene(S().project);
+  S().commit((d) => void d.scenes.push(scene));
+  S().select({ sceneId: scene.id, layerIds: [], audioIds: [] });
+  showScene(scene);
+  return scene.id;
+}
+
+/** Scene to add layers to: the selected one, else the one under the playhead, else null (a new one is needed). */
+function targetSceneId(): string | null {
   const { project, selection, time } = S();
   if (selection.sceneId && project.scenes.some((s) => s.id === selection.sceneId)) return selection.sceneId;
   const atHead = project.scenes.find((s) => time >= s.start && time < s.start + s.duration);
-  return atHead?.id ?? addScene();
+  return atHead?.id ?? null;
 }
 
 export function duplicateScene(sceneId: string) {
@@ -56,7 +64,7 @@ export function duplicateScene(sceneId: string) {
     copy.start = Math.min(src.start + src.duration, Math.max(0, d.settings.durationSec - src.duration));
     d.scenes.splice(i + 1, 0, copy);
   });
-  S().select({ sceneId: id, layerIds: [] });
+  S().select({ sceneId: id, layerIds: [], audioIds: [] });
 }
 
 export function deleteScene(sceneId: string) {
@@ -105,56 +113,78 @@ function baseLayer(name: string, scene: Scene, settings: Settings) {
   };
 }
 
+/** Add a layer to the target scene. If there is no scene yet, the scene is created in the same undo step. */
 function addLayer(make: (scene: Scene, settings: Settings) => Layer) {
-  const sceneId = targetScene();
+  const existing = targetSceneId();
+  const created = existing ? null : newScene(S().project);
+  const sceneId = existing ?? created!.id;
   let id = '';
   S().commit((d) => {
+    if (created) d.scenes.push(created);
     const scene = d.scenes.find((s) => s.id === sceneId) as Scene | undefined;
     if (!scene) return;
     const layer = make(scene, d.settings);
     id = layer.id;
     scene.layers.push(layer);
   });
-  S().select({ sceneId, layerIds: [id] });
+  S().select({ sceneId, layerIds: [id], audioIds: [] });
+  if (created) showScene(created);
   return id;
 }
 
 export function addText() {
-  return addLayer((scene, st) => ({
-    ...baseLayer('Text', scene, st),
-    type: 'text',
-    content: 'Your text',
-    fontFamily: 'Inter',
-    fontSize: Math.round(st.height * 0.08),
-    fontWeight: 700,
-    lineHeight: 1.2,
-    letterSpacing: 0,
-    align: 'center',
-    color: '#ffffff',
-  }));
+  return addLayer((scene, st) =>
+    makeLayer({
+      ...baseLayer('Text', scene, st),
+      type: 'text',
+      content: 'Your text',
+      fontFamily: 'Inter',
+      fontSize: Math.round(st.height * 0.08),
+      fontWeight: 700,
+      lineHeight: 1.2,
+      letterSpacing: 0,
+      align: 'center',
+      color: '#ffffff',
+    }),
+  );
 }
 
-export function addShape(shape: 'rect' | 'ellipse') {
+const SHAPE_NAMES: Record<ShapeKind, string> = {
+  rect: 'Rectangle',
+  ellipse: 'Ellipse',
+  triangle: 'Triangle',
+  star: 'Star',
+  polygon: 'Polygon',
+  line: 'Line',
+};
+
+export function addShape(shape: ShapeKind) {
   return addLayer((scene, st) => {
-    const size = Math.round(Math.min(st.width, st.height) * 0.3);
-    return {
-      ...baseLayer(shape === 'rect' ? 'Rectangle' : 'Ellipse', scene, st),
-      type: 'shape',
-      shape,
-      width: size,
-      height: size,
-      cornerRadius: shape === 'rect' ? Math.round(size * 0.08) : 0,
-      fill: '#4f7cff',
-      stroke: '#ffffff',
-      strokeWidth: 0,
-    };
+    const short = Math.min(st.width, st.height);
+    const size = Math.round(short * 0.3);
+    const common = { ...baseLayer(SHAPE_NAMES[shape], scene, st), type: 'shape' as const, shape, cornerRadius: 0, stroke: '#ffffff', strokeWidth: 0 };
+    switch (shape) {
+      case 'rect':
+        return makeLayer({ ...common, width: size, height: size, cornerRadius: Math.round(size * 0.08), fill: '#4f7cff' });
+      case 'ellipse':
+        return makeLayer({ ...common, width: size, height: size, fill: '#4f7cff' });
+      case 'triangle':
+        return makeLayer({ ...common, width: size, height: Math.round(size * 0.87), fill: '#ffb020' });
+      case 'star':
+        return makeLayer({ ...common, width: size, height: size, fill: '#ffd23f', points: 5, innerRadius: 0.45 });
+      case 'polygon':
+        return makeLayer({ ...common, width: size, height: size, fill: '#22c55e', points: 6 });
+      case 'line':
+        // A line is drawn across the middle of its box; the box height only sets how easy it is to grab.
+        return makeLayer({ ...common, width: Math.round(size * 1.6), height: Math.max(8, Math.round(short * 0.04)), fill: '#00000000', strokeWidth: Math.max(2, Math.round(short * 0.008)) });
+    }
   });
 }
 
 export function addCursor() {
   return addLayer((scene, st) => {
     const d = Math.min(scene.duration, 2);
-    return {
+    return makeLayer({
       ...baseLayer('Cursor', scene, st),
       type: 'cursor',
       points: [
@@ -166,7 +196,7 @@ export function addCursor() {
       size: Math.round(st.height * 0.035),
       color: '#ffffff',
       rippleColor: '#ffffff66',
-    };
+    });
   });
 }
 
@@ -176,13 +206,13 @@ export function addImageLayer(asset: Asset) {
     const nh = asset.height ?? st.height / 2;
     // Fit inside 60% of the frame without ever upscaling beyond natural size for bitmaps.
     const fit = Math.min((st.width * 0.6) / nw, (st.height * 0.6) / nh, asset.type === 'svg' ? Infinity : 1);
-    return {
+    return makeLayer({
       ...baseLayer(asset.originalName.replace(/\.[^.]+$/, ''), scene, st),
       type: 'image',
       assetId: asset.id,
       width: Math.max(1, Math.round(nw * fit)),
       height: Math.max(1, Math.round(nh * fit)),
-    };
+    });
   });
 }
 

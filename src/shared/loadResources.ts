@@ -51,7 +51,8 @@ export async function loadResources(project: Project, urlFor: (assetId: string) 
   const images = new Map<string, CanvasImageSource>();
   const missing = new Set<string>();
   await Promise.all(
-    project.assets.map(async (a) => {
+    // Audio is decoded by the audio engine / mixed by ffmpeg, never drawn.
+    project.assets.filter((a) => a.type !== 'audio').map(async (a) => {
       const url = urlFor(a.id);
       if (a.type === 'font') {
         await loadFont(a.fontFamily ?? a.id, url);

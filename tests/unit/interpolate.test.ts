@@ -1,14 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { formatColor, interpolateValue, parseColor, propAt, resolveLayer, sampleKeyframes } from '../../src/shared/interpolate';
+import { makeLayer } from '../../src/shared/factories';
 import type { Keyframe, ShapeLayer } from '../../src/shared/schema';
 
 const kf = (time: number, value: number | string, type: 'linear' | 'easeIn' = 'linear'): Keyframe => ({ id: `k${time}`, time, value, easing: { type } });
 
-const shape = (): ShapeLayer => ({
+const shape = (): ShapeLayer =>
+  makeLayer({
   id: 'l1', name: 'S', type: 'shape', visible: true, locked: false, start: 0, duration: 5,
   anchorX: 0.5, anchorY: 0.5, x: 100, y: 100, scale: 1, rotation: 0, opacity: 1, keyframes: {},
   shape: 'rect', width: 100, height: 50, cornerRadius: 0, fill: '#ff0000', stroke: '#000000', strokeWidth: 0,
-});
+  });
 
 describe('interpolation', () => {
   it('holds the first value before the first key and the last value after the last', () => {

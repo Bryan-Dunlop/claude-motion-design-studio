@@ -32,8 +32,12 @@ interface EditorState {
   time: number;
   playing: boolean;
   loop: boolean;
+  /** When set, playback stops at this time (used by "Preview" buttons). */
+  playUntil: number | null;
   zoom: number; // timeline pixels per second
   selection: Selection;
+  /** Keyframe ids selected in the timeline (or just added with ◆). Filtered after undo/redo. */
+  selectedKeys: string[];
   missingAssets: Set<string>;
   toasts: Toast[];
 
@@ -49,9 +53,12 @@ interface EditorState {
 
   setTime: (t: number) => void;
   setPlaying: (p: boolean) => void;
+  /** Play [start, end] once and stop (clamped to the project). */
+  previewRange: (start: number, end: number) => void;
   setLoop: (l: boolean) => void;
   setZoom: (z: number) => void;
   select: (sel: Partial<Selection>) => void;
+  selectKeys: (ids: string[]) => void;
   setMissingAssets: (m: Set<string>) => void;
   toast: (text: string, kind?: Toast['kind']) => void;
   dismissToast: (id: number) => void;
@@ -71,8 +78,10 @@ export const useEditor = create<EditorState>((set, get) => {
     time: 0,
     playing: false,
     loop: false,
+    playUntil: null,
     zoom: 60,
     selection: { sceneId: null, layerIds: [], audioIds: [] },
+    selectedKeys: [],
     missingAssets: new Set(),
     toasts: [],
 
@@ -124,6 +133,7 @@ export const useEditor = create<EditorState>((set, get) => {
         time: 0,
         playing: false,
         selection: { sceneId: project.scenes[0]?.id ?? null, layerIds: [], audioIds: [] },
+        selectedKeys: [],
       }),
     markSaved: (project, name) => set({ savedProject: project, projectName: name }),
 
@@ -131,10 +141,18 @@ export const useEditor = create<EditorState>((set, get) => {
       const max = get().project.settings.durationSec;
       set({ time: Math.min(Math.max(0, t), max) });
     },
-    setPlaying: (playing) => set({ playing }),
+    setPlaying: (playing) => set(playing ? { playing } : { playing, playUntil: null }),
+    previewRange: (start, end) => {
+      const dur = get().project.settings.durationSec;
+      const s0 = Math.min(Math.max(0, start), dur);
+      set({ time: s0, playUntil: Math.min(Math.max(s0, end), dur), playing: false });
+      // Toggle so the playback effect restarts from the new time even if it was already playing.
+      queueMicrotask(() => set({ playing: true }));
+    },
     setLoop: (loop) => set({ loop }),
     setZoom: (zoom) => set({ zoom: Math.min(800, Math.max(5, zoom)) }),
     select: (sel) => set({ selection: { ...get().selection, ...sel } }),
+    selectKeys: (selectedKeys) => set({ selectedKeys }),
     setMissingAssets: (missingAssets) => set({ missingAssets }),
     toast: (text, kind = 'info') => {
       const id = ++toastId;
@@ -155,6 +173,9 @@ function fixSelection(set: (s: Partial<EditorState>) => void, get: () => EditorS
   if ((scene?.id ?? null) !== selection.sceneId || layerIds.length !== selection.layerIds.length || audioIds.length !== selection.audioIds.length) {
     set({ selection: { sceneId: scene?.id ?? null, layerIds, audioIds } });
   }
+  const keyIds = new Set(project.scenes.flatMap((s) => s.layers.flatMap((l) => Object.values(l.keyframes).flatMap((ks) => ks.map((k) => k.id)))));
+  const selectedKeys = get().selectedKeys.filter((id) => keyIds.has(id));
+  if (selectedKeys.length !== get().selectedKeys.length) set({ selectedKeys });
 }
 
 // ---------------------------------------------------------------- selectors & helpers
@@ -207,9 +228,10 @@ export function currentValue(scene: Scene, layer: Layer, prop: string, time: num
   return propAt(layer, prop, layerLocalTime(scene, layer, time));
 }
 
-export function toggleKeyframe(draft: Draft<Project>, layerId: string, prop: string, time: number) {
+/** Add a keyframe at the playhead (with id `newId`), or remove the one already there. */
+export function toggleKeyframe(draft: Draft<Project>, layerId: string, prop: string, time: number, newId = makeId('kf')): 'added' | 'removed' | null {
   const hit = findLayer(draft, layerId);
-  if (!hit) return;
+  if (!hit) return null;
   const layer = hit.layer;
   const local = clampTime(layerLocalTime(hit.scene, layer, time), layer.duration);
   const keys = (layer.keyframes[prop] ??= []);
@@ -217,12 +239,13 @@ export function toggleKeyframe(draft: Draft<Project>, layerId: string, prop: str
   if (existing) {
     keys.splice(keys.indexOf(existing), 1);
     if (keys.length === 0) delete layer.keyframes[prop];
-    return;
+    return 'removed';
   }
   // The first keyframe takes the static value, so toggling it on changes nothing visually.
   const value = propAt(layer, prop, local);
-  keys.push({ id: makeId('kf'), time: local, value, easing: { type: 'easeInOut' } });
+  keys.push({ id: newId, time: local, value, easing: { type: 'easeInOut' } });
   keys.sort((a, b) => a.time - b.time);
+  return 'added';
 }
 
 export function clampTime(t: number, duration: number) {

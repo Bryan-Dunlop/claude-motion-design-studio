@@ -1,4 +1,5 @@
 // Shared building blocks for the Properties panel sections.
+import { makeId } from '../../../shared/presets';
 import { ANIMATABLE, type Layer, type Scene } from '../../../shared/schema';
 import { relinkAsset, updateLayers } from '../../actions';
 import { currentValue, keyAt, layerLocalTime, setProp, toggleKeyframe, useEditor } from '../../store';
@@ -37,7 +38,14 @@ export function KfToggle({ scene, layer, prop }: { scene: Scene; layer: Layer; p
             ? 'Add a keyframe at the playhead (this property is animated)'
             : 'Start animating: add a keyframe for this property at the playhead'
       }
-      onClick={() => useEditor.getState().commit((d) => toggleKeyframe(d, layer.id, prop, useEditor.getState().time))}
+      onClick={() => {
+        const st = useEditor.getState();
+        const id = makeId('kf');
+        let result: ReturnType<typeof toggleKeyframe> = null;
+        st.commit((d) => void (result = toggleKeyframe(d, layer.id, prop, st.time, id)));
+        // A new keyframe becomes the selection, so its easing can be edited right away.
+        if (result === 'added') st.selectKeys([id]);
+      }}
     >
       ◆
     </button>

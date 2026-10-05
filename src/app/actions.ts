@@ -196,6 +196,11 @@ export function addCursor() {
       size: Math.round(st.height * 0.035),
       color: '#ffffff',
       rippleColor: '#ffffff66',
+      // A subtle shadow like a real OS pointer.
+      shadow: true,
+      shadowColor: '#00000059',
+      shadowBlur: Math.round(st.height * 0.035 * 0.15),
+      shadowOffsetY: Math.round(st.height * 0.035 * 0.06),
     });
   });
 }

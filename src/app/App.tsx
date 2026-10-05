@@ -243,6 +243,11 @@ function usePlayback() {
       const st = useEditor.getState();
       const dur = st.project.settings.durationSec;
       let t = start + (performance.now() - t0) / 1000;
+      if (st.playUntil !== null && t >= st.playUntil) {
+        st.setTime(st.playUntil);
+        st.setPlaying(false);
+        return;
+      }
       if (t >= dur) {
         if (st.loop) t = t % dur;
         else {

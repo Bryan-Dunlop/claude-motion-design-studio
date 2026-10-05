@@ -105,6 +105,7 @@ export function Timeline() {
     if (l.locked) return;
     const eps = 0.5 / fps;
     const moving = new Set(Object.values(l.keyframes).flatMap((keys) => keys.filter((k) => Math.abs(k.time - g.time) < eps).map((k) => k.id)));
+    st().selectKeys(e.shiftKey ? [...new Set([...st().selectedKeys, ...moving])] : [...moving]);
     startDrag(e, {
       onMove: (dx) => {
         const nt = Math.min(Math.max(0, snapToFrame(g.time + dx / zoom, fps)), l.duration);

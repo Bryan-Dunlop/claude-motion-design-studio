@@ -22,7 +22,7 @@ describe('schema v2 migration', () => {
     expect(scene.background).toBeNull();
     expect(scene.transition).toEqual({ type: 'none', duration: 0.6, direction: 'left', easing: { type: 'easeInOut' } });
     for (const l of scene.layers) {
-      expect(l).toMatchObject({ blur: 0, shadowColor: '#00000000', shadowBlur: 0, shadowOffsetX: 0, shadowOffsetY: 0, blendMode: 'normal' });
+      expect(l).toMatchObject({ blur: 0, shadow: false, shadowColor: '#00000040', shadowBlur: 0, shadowOffsetX: 0, shadowOffsetY: 0, blendMode: 'normal' });
       if (l.type === 'text') expect(l).toMatchObject({ fillMode: 'solid', strokeWidth: 0, textIn: null, textOut: null });
       if (l.type === 'shape') expect(l).toMatchObject({ points: 5, innerRadius: 0.45, trimStart: 0, trimEnd: 1, trimOffset: 0, lineCap: 'round', fillMode: 'solid' });
     }

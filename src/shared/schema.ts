@@ -66,9 +66,11 @@ const LayerBase = {
   opacity: z.number().min(0).max(1),
   /** Property name -> keyframes (sorted by time). */
   keyframes: z.record(z.string(), z.array(KeyframeSchema)),
-  // ---- effects (v2) — sizes in project pixels
+  // ---- effects (v2) — sizes in project pixels, scaled with the layer's own scale when drawn
   blur: z.number().min(0).default(0),
-  shadowColor: z.string().default('#00000000'),
+  /** Drop shadow on/off (kept separate from the colour so toggling never touches values or keyframes). */
+  shadow: z.boolean().default(false),
+  shadowColor: z.string().default('#00000040'),
   shadowBlur: z.number().min(0).default(0),
   /** Screen-space offset (not rotated with the layer). */
   shadowOffsetX: z.number().default(0),
@@ -92,6 +94,8 @@ export const TextAnimSchema = z.object({
   distance: z.number(),
   easing: EasingSchema,
   seed: z.number().int(),
+  /** Typewriter only: show a blinking caret after the last visible character. */
+  caret: z.boolean().default(false),
 });
 export type TextAnim = z.infer<typeof TextAnimSchema>;
 

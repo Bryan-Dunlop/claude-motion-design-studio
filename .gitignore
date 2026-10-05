@@ -1,0 +1,8 @@
+node_modules/
+dist/
+workspace/
+test-results/
+playwright-report/
+*.mp4
+.DS_Store
+.e2e-workspace/

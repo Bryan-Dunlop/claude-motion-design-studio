@@ -1,5 +1,5 @@
 // Animation presets and stagger. Both GENERATE ordinary editable data (keyframes / start times).
-import type { Easing, Keyframe, Layer } from './schema';
+import { ANIMATABLE, type Easing, type Keyframe, type Layer } from './schema';
 
 export type PresetKind = 'slide' | 'fade' | 'scale';
 export type PresetPhase = 'in' | 'out';
@@ -37,11 +37,30 @@ function sourceTag(phase: PresetPhase) {
   return `preset:${phase}`;
 }
 
+/** Properties a preset animates on a layer. */
+export function presetProps(params: Pick<PresetParams, 'kind' | 'direction'>): string[] {
+  switch (params.kind) {
+    case 'fade':
+      return ['opacity'];
+    case 'scale':
+      return ['scale'];
+    case 'slide':
+      return [params.direction === 'left' || params.direction === 'right' ? 'x' : 'y', 'opacity'];
+  }
+}
+
+/** A preset only applies to layers on which every property it animates is animatable (e.g. no slide on a cursor). */
+export function presetApplies(layer: Layer, params: Pick<PresetParams, 'kind' | 'direction'>): boolean {
+  return presetProps(params).every((p) => ANIMATABLE[layer.type].includes(p));
+}
+
 /**
  * Returns new keyframes map for `layer` with the preset applied.
  * Any keyframes previously generated for the same phase are removed first, so re-applying replaces.
+ * Layers the preset doesn't apply to (see presetApplies) are returned unchanged.
  */
 export function applyPreset(layer: Layer, params: PresetParams): Record<string, Keyframe[]> {
+  if (!presetApplies(layer, params)) return layer.keyframes;
   const tag = sourceTag(params.phase);
   const result: Record<string, Keyframe[]> = {};
   for (const [prop, keys] of Object.entries(layer.keyframes)) {

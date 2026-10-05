@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { sanitizeName } from '../../shared/names';
 import { api, listProjects, openProject, saveProject } from '../actions';
 import { isDirty, useEditor } from '../store';
 
@@ -53,7 +54,7 @@ export function SaveAsDialog({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     listProjects().then((l) => setExisting(l.map((p) => p.name)), () => undefined);
   }, []);
-  const clean = name.replace(/[^\w\- ]+/g, '').trim();
+  const clean = sanitizeName(name);
   const clash = existing.includes(clean) && clean !== useEditor.getState().projectName;
   return (
     <Modal title="Save project as" onClose={onClose}>

@@ -154,7 +154,13 @@ export async function startServer(opts: { port: number; workspace: string; host?
     const vite = await createViteServer({
       root: ROOT,
       configFile: path.join(ROOT, 'vite.config.ts'),
-      server: { middlewareMode: true, hmr: opts.hmr === false ? false : { server: httpServer }, ws: opts.hmr === false ? false : undefined, watch: { ignored: [path.resolve(opts.workspace) + '/**', '**/test-results/**'] } },
+      server: {
+        middlewareMode: true,
+        hmr: opts.hmr === false ? false : { server: httpServer },
+        ws: opts.hmr === false ? false : undefined,
+        // A function, not a glob: absolute paths can contain glob characters (e.g. "C:\\Users\\Me (Work)").
+        watch: { ignored: [(p: string) => isInside(p, ws.root) || /[\\/](test-results|\.e2e-workspace|\.vite)([\\/]|$)/.test(p)] },
+      },
       appType: 'mpa',
       logLevel: 'warn',
     });
@@ -177,4 +183,11 @@ export async function startServer(opts: { port: number; workspace: string; host?
       await closeVite();
     },
   };
+}
+
+function isInside(p: string, dir: string): boolean {
+  const norm = (x: string) => path.resolve(x).replace(/\\/g, '/').toLowerCase();
+  const a = norm(p);
+  const b = norm(dir);
+  return a === b || a.startsWith(b + '/');
 }

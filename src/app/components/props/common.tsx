@@ -1,24 +1,13 @@
 // Shared building blocks for the Properties panel sections.
 import { makeId } from '../../../shared/presets';
+import { PROP_LABELS, propLabel } from '../../../shared/propLabels';
 import { ANIMATABLE, type Layer, type Scene } from '../../../shared/schema';
 import { relinkAsset, updateLayers } from '../../actions';
-import { currentValue, keyAt, layerLocalTime, setProp, toggleKeyframe, useEditor } from '../../store';
+import { currentValue, findLayer, keyAt, layerLocalTime, setProp, toggleKeyframe, useEditor } from '../../store';
 import { ColorField, NumberField, Row } from '../Fields';
 
-export const TIPS: Record<string, string> = {
-  x: 'Horizontal position of the anchor point, in project pixels from the left edge.',
-  y: 'Vertical position of the anchor point, in project pixels from the top edge.',
-  scale: 'Size multiplier. 1 = original size, 2 = double, 0.5 = half.',
-  rotation: 'Rotation in degrees around the anchor point. Positive = clockwise.',
-  opacity: 'How see-through the layer is. 1 = solid, 0 = invisible.',
-  fontSize: 'Text height in project pixels.',
-  letterSpacing: 'Extra space between letters, in pixels. Negative tightens.',
-  color: 'Text colour.',
-  width: 'Width in project pixels (before scale).',
-  height: 'Height in project pixels (before scale).',
-  cornerRadius: 'Rounds the rectangle corners, in pixels.',
-  fill: 'Fill colour of the shape.',
-};
+/** Tooltips per property (from the shared label table, so Properties and the timeline use the same words). */
+export const TIPS: Record<string, string> = Object.fromEntries(Object.entries(PROP_LABELS).map(([k, v]) => [k, v.tip]));
 
 export function KfToggle({ scene, layer, prop }: { scene: Scene; layer: Layer; prop: string }) {
   const time = useEditor((s) => s.time);
@@ -53,11 +42,14 @@ export function KfToggle({ scene, layer, prop }: { scene: Scene; layer: Layer; p
 }
 
 export interface NumOpts {
+  /** Step/min/max are in displayed units (percent when `percent` is set). */
   step?: number;
   min?: number;
   max?: number;
   decimals?: number;
   tip?: string;
+  /** Edit a 0..1 fraction as 0..100 %. */
+  percent?: boolean;
 }
 
 /**
@@ -72,17 +64,57 @@ export function useLayerFields(scene: Scene, layer: Layer) {
   const setP = (p: string, v: number | string) => commit((d) => setProp(d, layer.id, p, v, useEditor.getState().time));
   const setStatic = (patch: Record<string, unknown>) => updateLayers([layer.id], (l) => void Object.assign(l, patch));
   const kf = (p: string) => (animatable.includes(p) ? <KfToggle scene={scene} layer={layer} prop={p} /> : null);
-  const num = (p: string, label: string, opts: NumOpts = {}) => (
+  const numberField = (p: string, opts: NumOpts) => (
+    <NumberField
+      value={Number(val(p))}
+      step={opts.step ?? 1}
+      min={opts.min}
+      max={opts.max}
+      decimals={opts.decimals ?? (opts.percent ? 1 : 2)}
+      displayScale={opts.percent ? 100 : 1}
+      suffix={opts.percent ? '%' : undefined}
+      onCommit={(v) => setP(p, v)}
+      testId={`prop-${p}`}
+    />
+  );
+  /** A number row; `label` defaults to the shared label for the property. */
+  const num = (p: string, label: string = propLabel(p).label, opts: NumOpts = {}) => (
     <Row label={label} tip={opts.tip ?? TIPS[p] ?? label} kf={kf(p)}>
-      <NumberField value={Number(val(p))} step={opts.step ?? 1} min={opts.min} max={opts.max} decimals={opts.decimals} onCommit={(v) => setP(p, v)} testId={`prop-${p}`} />
+      {numberField(p, opts)}
     </Row>
   );
-  const color = (p: string, label: string, tip?: string) => (
+  /** Two number fields on one row (e.g. shadow offset X/Y), each with its own ◆ keyframe toggle. */
+  const pair = (px: string, py: string, label: string, opts: NumOpts = {}) => (
+    <Row label={label} tip={opts.tip ?? `${TIPS[px] ?? px} / ${TIPS[py] ?? py}`}>
+      <span className="pair kf-pair">
+        {kf(px)}
+        {numberField(px, opts)}
+        {kf(py)}
+        {numberField(py, opts)}
+      </span>
+    </Row>
+  );
+  const color = (p: string, label: string = propLabel(p).label, tip?: string) => (
     <Row label={label} tip={tip ?? TIPS[p] ?? label} kf={kf(p)}>
       <ColorField value={String(val(p))} testId={`prop-${p}`} onLive={(v) => commit((d) => setProp(d, layer.id, p, v, useEditor.getState().time))} />
     </Row>
   );
-  return { commit, time, val, setP, setStatic, kf, num, color };
+  /**
+   * Write several properties at once as ONE undo step. Animatable properties go through setProp (keyframe at the
+   * playhead when animated); everything else is set statically. Use this for any button that changes values
+   * ("Natural size", "Add outline", drop-shadow defaults…) — never write an animatable property statically.
+   */
+  const setAtPlayhead = (patch: Record<string, number | string | boolean | null>) =>
+    commit((d) => {
+      const t = useEditor.getState().time;
+      const hit = findLayer(d, layer.id);
+      if (!hit) return;
+      for (const [p, v] of Object.entries(patch)) {
+        if (animatable.includes(p) && (typeof v === 'number' || typeof v === 'string')) setProp(d, layer.id, p, v, t);
+        else (hit.layer as unknown as Record<string, unknown>)[p] = v;
+      }
+    });
+  return { commit, time, val, setP, setStatic, setAtPlayhead, kf, num, pair, color };
 }
 
 export type LayerFields = ReturnType<typeof useLayerFields>;

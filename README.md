@@ -2,6 +2,10 @@
 
 A local motion-design editor that runs in your browser and saves to your own disk. You build animations from scenes, layers and keyframes, then export an H.264 MP4. It needs no account, makes no AI/API calls, and edits, plays back and saves fully offline.
 
+> **v2 in progress** on this branch: effects, scene transitions, text animation, new shapes, audio, snapping/guides and
+> export options are being added (see [docs/v2-plan.md](docs/v2-plan.md)). Until that work lands, this README describes
+> what is implemented and tested today.
+
 The deliverable is the **editor itself**. It opens on an empty project and never creates demo content, and it renders video only when you click **Export MP4** (or run the CLI).
 
 ---
@@ -38,7 +42,7 @@ Projects are saved in `./workspace/` by default. Set `MOTION_WORKSPACE=<folder>`
 
 | Area | What it does |
 |---|---|
-| **Toolbar** | New / Open / Save / Save as, Export & Import `.zip`, Undo / Redo, add Scene / Text / Rect / Ellipse / Cursor, Import asset, **Export MP4**. "More ▾" lists features that are *not available* in v1. |
+| **Toolbar** | New / Open / Save / Save as, Export & Import `.zip`, Undo / Redo, add Scene / Text / Rect / **Shape ▾** (rectangle, ellipse, triangle, star, polygon, line) / Cursor, Import asset, **Export MP4**. "More ▾" lists features that are *not available* yet. |
 | **Left panel** | **Scenes**: add, rename (double-click), reorder ↑↓, duplicate ⧉, delete ✕. **Layers** of the selected scene, top = front: show/hide, lock, reorder, rename, duplicate, delete. **Assets**: missing files show a **Relink…** button. |
 | **Preview** | Click to select, Shift-click to add to the selection, and drag to move (hold Shift to lock to one axis). Corner handles scale, and the round handle above rotates (Shift snaps to 15°). Cursor layers show their path, and you drag the numbered points to move them. Drop image or font files here to import them. |
 | **Properties** (right) | Transform, opacity, typography, alignment, spacing and colour. The **◆** next to a property adds or removes a keyframe at the playhead. When the playhead is on a keyframe, an **easing picker** appears with a live curve and a plain-language description. **Animation presets** (fade, slide or scale; in or out) and **Stagger** (when several layers are selected) also live here. With nothing selected, this panel shows **Project settings**: duration, aspect ratio (16:9, 9:16, 1:1, 4:5, custom), resolution, fps and background. Every control has a tooltip. |
@@ -146,9 +150,9 @@ Everything in this section has a passing automated test. Run `npm test` for 39 u
 
 ## Not implemented
 
-- Audio, video clips as layers, scene transitions, blur and other effects, AI generation, and cloud sync. These are listed as **"Not available"** under the toolbar's "More ▾" menu.
+- Video clips as layers, AI generation, and cloud sync. These are listed as **"Not available"** under the toolbar's "More ▾" menu. (Audio, scene transitions and effects are being built in v2.)
 - Marquee (box) selection, snapping and guides, and per-property keyframe rows in the timeline. Diamonds are grouped per layer, and dragging one moves every property's keyframe at that time.
-- Animating image width/height and the anchor point (they are fixed values). Shapes are limited to rectangle and ellipse.
+- Animating the anchor point (it is a fixed value). Triangle, star, polygon and line can be added but currently draw as rectangles until the v2 shape work lands.
 
 ## Known limitations
 
@@ -156,7 +160,6 @@ Everything in this section has a passing automated test. Run `npm test` for 39 u
 - **Preview vs export:** the preview draws in *your* browser, while export uses headless Chromium. In Chrome or Edge they match. In Firefox or Safari, text anti-aliasing may differ slightly.
 - **Export speed:** rendering is CPU-only, so expect roughly 1 minute per 15 s of 4K on a 4-core machine.
 - **Undo history** lives in memory only and resets when you open a project.
-- **Adding a layer to an empty project** creates the scene and the layer as two undo steps.
 - **Test hook:** the editor exposes its state store on `window.__motion` (read by the end-to-end tests).
 
 ---

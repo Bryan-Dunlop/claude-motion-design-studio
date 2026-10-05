@@ -160,3 +160,9 @@ pre { white-space: pre-wrap; margin: 0; }
 .toast.error { border-color: var(--danger); color: #ffd0d0; }
 
 .transition-strip { position: absolute; left: 0; top: 0; bottom: 0; pointer-events: none; background: repeating-linear-gradient(135deg, #ffffff33 0 4px, transparent 4px 8px); border-right: 1px solid #ffffff66; }
+.num-suffix { display: flex; align-items: center; gap: 3px; min-width: 0; }
+.num-suffix .num { flex: 1; min-width: 0; }
+.num-suffix .suffix { color: var(--muted); font-size: 11px; }
+.section-badge { margin-left: 6px; color: var(--key); }
+.kf-pair { display: flex; gap: 3px; align-items: center; }
+.kf-pair .num { min-width: 0; flex: 1; }

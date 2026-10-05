@@ -15,3 +15,7 @@
 *.flac binary
 *.mp4 binary
 *.zip binary
+*.aac binary
+*.opus binary
+*.gif binary
+*.ico binary

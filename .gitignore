@@ -6,3 +6,4 @@ playwright-report/
 *.mp4
 .DS_Store
 .e2e-workspace/
+.vite/

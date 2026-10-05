@@ -38,7 +38,10 @@ interface EditorState {
   selection: Selection;
   /** Keyframe ids selected in the timeline (or just added with ◆). Filtered after undo/redo. */
   selectedKeys: string[];
+  /** Images/fonts that failed to load (set by resources.ts). */
   missingAssets: Set<string>;
+  /** Audio assets whose file is missing (set by the audio module; kept separate so neither loader overwrites the other). */
+  missingAudio: Set<string>;
   toasts: Toast[];
 
   commit: (recipe: (draft: Draft<Project>) => void) => void;
@@ -57,9 +60,18 @@ interface EditorState {
   previewRange: (start: number, end: number) => void;
   setLoop: (l: boolean) => void;
   setZoom: (z: number) => void;
+  /**
+   * Change the selection. Invariants (every UI path relies on them):
+   * - selecting layers clears the clip selection and keeps only keyframes that belong to those layers;
+   * - selecting clips clears the layer and keyframe selections.
+   */
   select: (sel: Partial<Selection>) => void;
+  /** Select keyframes: their layers become (part of) the layer selection and the clip selection is cleared. */
   selectKeys: (ids: string[]) => void;
+  /** Esc: clear keyframes first, then clips, then layers. */
+  clearSelectionStep: () => void;
   setMissingAssets: (m: Set<string>) => void;
+  setMissingAudio: (m: Set<string>) => void;
   toast: (text: string, kind?: Toast['kind']) => void;
   dismissToast: (id: number) => void;
 }
@@ -83,6 +95,7 @@ export const useEditor = create<EditorState>((set, get) => {
     selection: { sceneId: null, layerIds: [], audioIds: [] },
     selectedKeys: [],
     missingAssets: new Set(),
+    missingAudio: new Set(),
     toasts: [],
 
     commit: (recipe) => {
@@ -151,9 +164,43 @@ export const useEditor = create<EditorState>((set, get) => {
     },
     setLoop: (loop) => set({ loop }),
     setZoom: (zoom) => set({ zoom: Math.min(800, Math.max(5, zoom)) }),
-    select: (sel) => set({ selection: { ...get().selection, ...sel } }),
-    selectKeys: (selectedKeys) => set({ selectedKeys }),
+    select: (sel) => {
+      const { selection, selectedKeys, project } = get();
+      const next: Selection = { ...selection, ...sel };
+      let keys = selectedKeys;
+      if (sel.layerIds !== undefined) {
+        if (sel.layerIds.length > 0 && sel.audioIds === undefined) next.audioIds = [];
+        const owners = keyOwners(project);
+        keys = keys.filter((k) => next.layerIds.includes(owners.get(k)?.layerId ?? ''));
+      }
+      if (sel.audioIds !== undefined && sel.audioIds.length > 0) {
+        if (sel.layerIds === undefined) next.layerIds = [];
+        keys = [];
+      }
+      set({ selection: next, selectedKeys: keys });
+    },
+    selectKeys: (ids) => {
+      const { selection, project } = get();
+      if (ids.length === 0) return set({ selectedKeys: [] });
+      const owners = keyOwners(project);
+      const layers = ids.map((k) => owners.get(k)).filter((o): o is NonNullable<typeof o> => !!o);
+      set({
+        selectedKeys: ids,
+        selection: {
+          sceneId: layers[0]?.sceneId ?? selection.sceneId,
+          layerIds: [...new Set([...selection.layerIds, ...layers.map((o) => o.layerId)])],
+          audioIds: [],
+        },
+      });
+    },
+    clearSelectionStep: () => {
+      const { selectedKeys, selection } = get();
+      if (selectedKeys.length) set({ selectedKeys: [] });
+      else if (selection.audioIds.length) set({ selection: { ...selection, audioIds: [] } });
+      else set({ selection: { ...selection, layerIds: [] } });
+    },
     setMissingAssets: (missingAssets) => set({ missingAssets }),
+    setMissingAudio: (missingAudio) => set({ missingAudio }),
     toast: (text, kind = 'info') => {
       const id = ++toastId;
       set({ toasts: [...get().toasts, { id, kind, text }] });
@@ -190,6 +237,15 @@ export function findLayer(project: Project | Draft<Project>, layerId: string): {
     if (layer) return { scene: scene as Scene, layer: layer as Layer };
   }
   return null;
+}
+
+/** keyframe id -> the layer/scene it belongs to. */
+export function keyOwners(project: Project): Map<string, { layerId: string; sceneId: string }> {
+  const m = new Map<string, { layerId: string; sceneId: string }>();
+  for (const scene of project.scenes)
+    for (const layer of scene.layers)
+      for (const keys of Object.values(layer.keyframes)) for (const k of keys) m.set(k.id, { layerId: layer.id, sceneId: scene.id });
+  return m;
 }
 
 export function layerLocalTime(scene: Pick<Scene, 'start'>, layer: Pick<Layer, 'start'>, time: number) {

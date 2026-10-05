@@ -3,7 +3,10 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import AdmZip from 'adm-zip';
+import { sanitizeName } from '../src/shared/names';
 import { ProjectSchema, type Asset, type Project } from '../src/shared/schema';
+
+export { sanitizeName };
 
 export class Workspace {
   readonly root: string;
@@ -53,7 +56,7 @@ export class Workspace {
     }
     const tmp = path.join(dir, 'project.json.tmp');
     fs.writeFileSync(tmp, JSON.stringify(project, null, 2));
-    fs.renameSync(tmp, path.join(dir, 'project.json'));
+    renameWithRetry(tmp, path.join(dir, 'project.json'));
     return project;
   }
 
@@ -134,10 +137,6 @@ export function readProjectDir(dir: string): Project {
   return parseProject(JSON.parse(fs.readFileSync(file, 'utf8')));
 }
 
-export function sanitizeName(name: string): string {
-  return name.replace(/\.motion$/i, '').replace(/[^\w\- ]+/g, '').trim().slice(0, 80);
-}
-
 function extOf(filename: string): string {
   const m = /\.[a-zA-Z0-9]{1,6}$/.exec(filename);
   return m ? m[0].toLowerCase() : '';
@@ -148,4 +147,21 @@ export function safeJoin(base: string, rel: string): string {
   const p = path.resolve(base, rel);
   if (!p.startsWith(path.resolve(base) + path.sep)) throw new HttpError(400, `Unsafe path: ${rel}`);
   return p;
+}
+
+/** On Windows an antivirus scanner or indexer can briefly lock a fresh file (EPERM/EACCES/EBUSY): retry a few times. */
+export function renameWithRetry(from: string, to: string, attempts = 5) {
+  for (let i = 0; ; i++) {
+    try {
+      fs.renameSync(from, to);
+      return;
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (i >= attempts - 1 || !(code === 'EPERM' || code === 'EACCES' || code === 'EBUSY')) throw e;
+      const until = Date.now() + 50;
+      while (Date.now() < until) {
+        /* short synchronous back-off */
+      }
+    }
+  }
 }

@@ -1,7 +1,7 @@
 # Motion Studio v2 — design spec
 
-Status: **revised after critique round 1** (UX/product critic + feasibility critic, whose experiments live in
-`/tmp/.../scratchpad/critique/feasibility/`). This is the contract that implementation agents build
+Status: **revision 3 — final for implementation** (after the UX/product, feasibility and architecture critics; the
+feasibility experiments live in `/tmp/.../scratchpad/critique/feasibility/`). This is the contract that implementation agents build
 against. Principles carried over from v1 (non-negotiable):
 
 - `project.json` (zod) is the single source of truth. Old (v1) files must keep opening.
@@ -44,12 +44,47 @@ shadow, audio assets skipped by the image/font loader, `tests/e2e/exportCompare.
 `src/shared/canvas.ts` `createRenderCanvas` / `RENDER_CONTEXT_OPTIONS` (`{alpha:true, willReadFrequently:true}`, used by
 render.html; use it for every offscreen too), Playwright launched with `--disable-gpu` like the exporter.
 
+Foundation round 2 (after the architecture critique) — also DONE, use these instead of re-inventing them:
+- **Store selection invariants**: `select()` with layers clears clips and keeps only keyframes on those layers;
+  `select()` with clips clears layers + keyframes; `selectKeys()` adds the keys' layers and clears clips;
+  `clearSelectionStep()` (Esc: keyframes → clips → layers); `keyOwners(project)`; `missingAudio` +
+  `setMissingAudio` (separate from `missingAssets`, Relink shows for either).
+- **Fields.tsx**: `Select` `groups` (optgroups) + `tip`; `Section` `testId` + `badge`; `NumberField` `displayScale` + `suffix`.
+- **props/common.tsx**: `num(p, label?, {percent})`, `pair(px, py, label)` (two ◆), `color(p, label?)`,
+  **`setAtPlayhead(patch)`** — one undo step, keyframe-aware. RULE: any UI write to a property in `ANIMATABLE[type]`
+  goes through `setProp`/`setAtPlayhead`, never a static assignment ("Natural size", outline rows already converted).
+- `src/shared/propLabels.ts` — one `{label, long, tip}` per animatable property (Properties rows, timeline rows, toasts).
+- `src/shared/transitions.ts` — `transitionWindow`, `transitionProgress`, `transitionPartner` (rule below),
+  `partnerLocalTime`, `TRANSITION_LABELS`, `DIRECTION_LABELS`, `DIRECTIONAL`; unit-tested.
+  `components/TransitionStrip.tsx` renders the timeline strip with "<Style> from <scene> · d s".
+- `presets.ts` `presetProps` / `presetApplies`: a preset only applies when all its properties are animatable on the layer
+  type (no slide on a cursor); PresetPanel toasts skipped layers.
+- `src/shared/exportSize.ts` `exportSize(settings, s) → {outW, outH, scale}` (even sizes, fill scale) — unit-tested.
+- `src/shared/names.ts` `sanitizeName` (Windows reserved names, trailing dots/spaces; used by server + Save-as) and
+  `safeFileName` (asset file names ≤ 60 chars, used on import).
+- **Canvas pool**: `createCanvasPool()` / `CanvasPool` / `resetContext` in `src/shared/canvas.ts`; `RenderResources.canvasPool`
+  is set by the preview (resources.ts) and the render page. renderFrame must `acquire` offscreens from it (fall back to
+  `createRenderCanvas` when absent) and call `releaseAll()` when the frame is done.
+- Test helpers: `tests/e2e/helpers.ts` (`getState`, `layerOf`, `past`, `drag`, `center`, `openRenderPage`,
+  **`browserImport(page, '/src/shared/x.ts', fn, arg)`** for pixel-level tests on a real canvas — Node has no canvas),
+  `tests/unit/helpers/recordingCtx.ts` (records calls; `canvas` dims; `pool` with child recorders; `releases()`),
+  interleaved determinism + font-loaded tests in `tests/e2e/render.spec.ts`.
+- Windows: project.json rename retries on EPERM/EACCES/EBUSY, failed-export cleanup never throws, Vite watch-ignore is
+  a function, the CLI test runner is async with a timeout, more binary types in `.gitattributes`, Vite `cacheDir: .vite`
+  per checkout.
+- Schema: `CursorLayer.clickSound: {assetId, volume} | null` (default null).
+
 ---
 
 ## Lane A — rendering engine
 
-Owns: `src/shared/renderFrame.ts`, new `src/shared/*` render modules (`effects`, `transitions`, `textAnim`, `shapes`, …),
-`src/shared/presets.ts`, and the Properties sections `props/{EffectsSection,SceneExtras,TextAnimSection,TextSection,ShapeSection,ImageSection,PresetPanel,LayerProps}.tsx`.
+Owns: `src/shared/renderFrame.ts`, `src/shared/presets.ts`, `src/shared/transitions.ts` (extend, don't change the tested
+rule), `src/shared/loadResources.ts` (images/fonts only), new `src/shared/*` render modules (`effects`, `inkBounds`,
+`textAnim`, `shapes`, …), `components/TransitionStrip.tsx`, the Properties sections
+`props/{EffectsSection,SceneExtras,TextAnimSection,TextSection,ShapeSection,ImageSection,PresetPanel,LayerProps}.tsx`,
+new `props/engineFields.tsx` for any extra UI helpers (do NOT edit `Fields.tsx` / `props/common.tsx`), `src/app/styles-engine.css`.
+Tests: new files only — `tests/unit/engine-*.test.ts`, `tests/e2e/engine-*.spec.ts` (additive extensions to
+`tests/unit/helpers/recordingCtx.ts` allowed). Write `docs/lane-a.md` (user-facing behaviour, tested items, measured numbers).
 
 ### A1. Layer effects, scene background, scene transitions
 
@@ -58,7 +93,17 @@ Owns: `src/shared/renderFrame.ts`, new `src/shared/*` render modules (`effects`,
   type including the cursor). Blur radius, shadow blur and shadow offsets are multiplied by `k` so they shrink/grow with
   the layer (like CSS/After Effects). Offsets stay screen-space (not rotated).
 - `blendMode` → `globalCompositeOperation` (`normal` → `source-over`).
-- `blur > 0` → `ctx.filter = blur(${blur·k}px)`. Filters compose as a chain (`blur(a) blur(b)`) when a text unit adds its own.
+- `blur > 0` → `ctx.filter = blur(${blur·k}px)`.
+- **inkBounds(layer, local, scale) → device AABB** (pure, one function used everywhere): cursor = pointer AABB at
+  `cursorPosition(local)` (18×28.5 units × size/24 × layer.scale × scale) ∪ active ripple circles (r ≤ 1.5·size·scale);
+  text = per-line actualBoundingBox ⊕ strokeWidth/2 ⊕ max animator displacement |distance|·k ⊕ 3× max unit blur;
+  shapes = box ⊕ strokeWidth/2 × (miter joins ? miterLimit : 1); images = box. Unit test with a recording ctx: every
+  drawn coordinate lies inside inkBounds.
+- **Every draw made while `ctx.filter ≠ 'none'` runs inside `save(); beginPath(); rect(inkBounds ⊕ ceil(3·radius));
+  clip()`** — Chromium otherwise blurs the whole 4K clip region (measured 1477 ms vs 69.5 ms per frame for 8 small blurred
+  layers). The layer blur is applied once (at the isolation composite, or directly for single-draw layers); text units
+  apply only their own blur, each with its own clip. Perf guard (Playwright): a 4K `window.motion.render` with 3 blurred
+  layers + a 12-word "Blur in" at mid-animation finishes in < 400 ms.
 - Shadow drawn only when `layer.shadow === true` and `alpha(shadowColor) > 0`.
 - **Clamp resolved values** (spring/bezier easing overshoots, and canvas silently ignores invalid assignments, keeping the
   previous value): blur, shadowBlur, strokeWidth ≥ 0; alphas to [0,1]; trimStart/trimEnd to [0,1].
@@ -69,7 +114,9 @@ Owns: `src/shared/renderFrame.ts`, new `src/shared/*` render modules (`effects`,
   draw the layer with plain source-over / no shadow / no filter / opacity 1 into a scratch canvas (`createRenderCanvas`,
   bounded to the transformed box + a margin of 3× the blur/shadow extent), then `drawImage` it once at identity with
   shadow, filter, `globalCompositeOperation` and `globalAlpha` set. Single-draw layers keep the direct path, so v1
-  files (no effects) render exactly as before. Playwright check: a stroked rect with a shadow keeps its fill colour.
+  files (no effects) render exactly as before. Scratch bounds come from inkBounds (the cursor is NOT drawn inside its
+  layer box — a naive box would clip every new cursor away). Playwright checks: a stroked rect with a shadow keeps its
+  fill colour; a default cursor (shadow on) is visible at t=0 and t=1 s.
 
 **Scene background**: `scene.background` set → fill the whole frame with it before the scene's layers.
 
@@ -118,7 +165,7 @@ Owns: `src/shared/renderFrame.ts`, new `src/shared/*` render modules (`effects`,
 - Timeline strip tooltip: `Cross-fade from Hook · 0.6 s`.
 - Scene background: `☐ Own background colour` checkbox revealing a colour picker (initialised to the project background).
 - Effects section (collapsed unless an effect is active; summary reads `Effects ●` when active): `Blur` (◆),
-  `☐ Drop shadow` → when first ticked with all-zero values sets `shadowColor #00000040`, `shadowOffsetY =
+  `☐ Drop shadow` → when first ticked with all-zero values sets (via `setAtPlayhead`, one undo step) `shadowColor #00000040`, `shadowOffsetY =
   round(0.0075 × short edge)`, `shadowBlur = round(0.022 × short edge)`; rows `Colour` (◆), `Softness` (◆, shadowBlur),
   `Offset` X/Y pair (◆ each); `Blend` select last, grouped with `<optgroup>`s: Normal / Darken (Multiply, Darken, Colour
   burn) / Lighten (Screen, Lighten, Colour dodge) / Contrast (Overlay, Soft light, Hard light) / Difference (Difference,
@@ -176,12 +223,14 @@ Owns: `src/shared/renderFrame.ts`, new `src/shared/*` render modules (`effects`,
   `(|w cosθ| + |h sinθ|)/2`, stops 0 = `fill`/`color`, 1 = `gradientTo`. When the user switches to Gradient and
   `gradientTo` equals the base colour, set `gradientTo` to the base mixed 45% toward black (luminance > 0.5) or white.
 - Text outline: `strokeText` before the fill, `lineJoin = round`, width `strokeWidth`; colour row shown only when width > 0.
-- **"Draw on" preset**: new preset kind `draw` in `applyPreset` animating `trimEnd` (in: 0→1, out: 1→0).
+- **"Draw on" preset**: new preset kind `draw` in `applyPreset` animating `trimEnd` (in: 0→1, out: 1→0);
+  `presetProps({kind:'draw'}) = ['trimEnd']`, so `presetApplies` limits it to shapes; PresetPanel disables "Draw on"
+  unless a shape is selected (mixed selections apply it to the shapes and toast the rest).
 - **UI**: Shape type select (existing); `Sides` (polygon) / `Points` (star) / `Inner size` (star only) / `Line ends`
   (line, or when trimmed); hide Fill for Line; `Fill` select `Solid | Gradient` with `From` / `To` / `Angle` (small arrow
   rotating with it); section `Draw outline (trim)` (collapsed unless in use) with `Start %`, `End %`, `Offset %` (◆ each,
   shown as percentages, stored 0..1); when `strokeWidth` is 0 show "Only the outline is drawn — add one first" and an
-  `Add outline` button (sets `strokeWidth = round(0.01 × short edge)` and a transparent fill), one undo step.
+  `Add outline` button (via `setAtPlayhead`: `strokeWidth = round(0.01 × short edge)` and a transparent fill), one undo step.
 
 ### Lane A section order in LayerProps (single layer)
 
@@ -197,8 +246,11 @@ Owns: `src/shared/renderFrame.ts`, new `src/shared/*` render modules (`effects`,
 
 ## Lane B — app, audio, UX, export, infrastructure
 
-Owns: `src/app/**` except lane A's props files, `src/app/components/props/{AudioClipProps,KeySelectionSection,CursorPanel,ProjectSettings,common}.tsx`,
-`src/render/main.ts`, `server/*`, `src/shared/audioPlan.ts`, new `src/shared/fitToFrame.ts`, `scripts/*`, `.github/*`.
+Owns: `src/app/**` except lane A's files (incl. `Fields.tsx`, `props/common.tsx`,
+`props/{AudioClipProps,KeySelectionSection,CursorPanel,ProjectSettings,SceneProps}.tsx`, `styles.css`), `src/render/main.ts`,
+`server/*`, `src/shared/{audioPlan,fitToFrame,exportSize,names,canvas,assetUrl}.ts`, `scripts/*`, `.github/*`,
+`playwright.config.ts`. Tests: new files `tests/unit/app-*.test.ts`, `tests/e2e/app-*.spec.ts`; existing e2e specs may
+be edited only where a lane-B UI change requires it (e.g. Export .zip moving into "File ▾"). Write `docs/lane-b.md`.
 
 ### B1. Audio
 
@@ -222,7 +274,18 @@ Owns: `src/app/**` except lane A's props files, `src/app/components/props/{Audio
   `Length (s)`, `Volume %`, `Fade in (s)`, `Fade out (s)`, `Mute`, Delete.
 - Click sounds: cursor clicks drawn as ● markers on the cursor layer's timeline row (absolute time); clips can be
   duplicated with Ctrl+D (at the playhead); audio assets in the Assets list get a `+ at playhead` button; the Cursor
-  panel gets an optional `Click sound` asset picker that creates/updates one clip per click (one undo step).
+  panel gets a `Click sound` asset picker + volume that sets `cursor.clickSound` (one undo step). `planAudio` and
+  `buildAudioArgs` expand every click of a visible cursor layer with a clickSound into a **virtual clip** at
+  `scene.start + layer.start + click.time` (skipping clicks outside the layer/scene range), so click sounds follow the
+  clicks through moves, duplication, paste and undo without stored clips. Identical inputs may share one ffmpeg input
+  via `asplit`.
+- Missing audio: an existence probe (HEAD `/api/asset…` or the decode cache's failure) feeds `store.setMissingAudio`;
+  the Assets list then shows Relink for it. Extend the "missing asset" e2e test with a WAV. Fix `uploadFile` so audio
+  never goes through `imageSize()` (relinking an audio file currently throws "could not decode image").
+- Engine: restart scheduling only when `project.audio` (or a referenced asset / clickSound) changes identity — not on
+  every project change, so dragging layers during playback doesn't glitch audio. Keep one full-rate AudioBuffer per asset
+  hash, decoded in the background after import/open and released when the asset is removed; clips not decoded yet are
+  skipped with a "preparing audio…" hint.
 - Export (`server/audioMix.ts` `buildAudioArgs`), **exact command verified on ffmpeg 6.1.1** (the spec's first version put
   audio 0.48 s early because adelay emits NOPTS timestamps, and could hang forever on an empty clip):
   ```
@@ -266,7 +329,12 @@ Owns: `src/app/**` except lane A's props files, `src/app/components/props/{Audio
   35%, sides 6%), otherwise a 90% title-safe box.
 - Toggles live in the playback bar after Loop: `Snap` (ON by default; tooltip "Snap to edges, centre and other layers
   (hold Ctrl/⌘ to drag freely)"), `Guides`, `🔊/🔇 Sound`, `PNG` (B3). Persist the toggles in localStorage.
-- Marquee selection on empty preview space (Shift adds).
+- Marquee selection on empty preview space (Shift adds). Snapping and marquee use the layer box corners already
+  computed in Preview (`place()`); hit-testing pads in screen pixels (`max(4, 6/fit)` project px) and a `line` shape is
+  hit by distance to its segment ≤ `max(strokeWidth/2, 6/fit)`.
+- Clipboard: store `structuredClone`d data (committed state is frozen by immer); paste assigns new ids, clamps key times
+  to `[0, layer.duration]` (or refuses with a toast when the playhead is outside the target layer), commits once and
+  selects the pasted keys.
 - Timeline space: draggable splitter between editor and timeline (default 240 px, min 160, max 60% of the window,
   localStorage), Scenes row sticky under the ruler.
 - Menus: a shared menu hook/component that closes on outside pointerdown and Escape, used by `+ Shape ▾`, `More ▾` and a
@@ -278,8 +346,11 @@ Owns: `src/app/**` except lane A's props files, `src/app/components/props/{Audio
   check)`), `Quality` (`Best (larger file)` CRF 16 / `Good` CRF 20 / `Draft (fastest)` CRF 26 + `veryfast`),
   `Include audio` (checked when clips exist; disabled with "No audio clips" otherwise). Remember choices in localStorage.
   Output name `${name}-${W}x${H}-${stamp}.mp4`. CLI flags `--scale`, `--crf`, `--no-audio`. Options validated with zod.
-  Scaled size: compute `outW/outH` once (even-rounded `W·s`, `H·s`), render with `scale = max(outW/W, outH/H)` (≤ 1 px crop,
-  never an unpainted edge), and carry `outW/outH` on the job for `acceptFrame`'s byte check and ffmpeg's `-s`.
+  Scaled size: use `exportSize(settings, s)` (foundation) everywhere — exporter (`acceptFrame` byte check, ffmpeg `-s`),
+  `/api/jobs/:id/project` (returns the size), the render page, the CLI, the dialog labels and
+  `window.motion.render(p, t, {exportScale})` — so the export-vs-render tests compare equal sizes. All export options
+  are optional with zod defaults (lane A's tests call `runExport(request, {project, name})`). Test 1080×1350 @ 50%
+  (→ 540×676) export-vs-render.
 - `PNG` button: current frame at full project resolution via renderFrame in the editor on a `createRenderCanvas` canvas
   (same text AA as the export), named `${name}-${W}x${H}-frame${n}.png`.
 - **Make a copy in another format**: `src/shared/fitToFrame.ts` `fitToFrame(project, W2, H2)`: `k = min(W2/W, H2/H)`,
@@ -287,10 +358,16 @@ Owns: `src/app/**` except lane A's props files, `src/app/components/props/{Audio
   (and scale keyframes); effects follow via the layer-scale factor. Project settings → `Make a copy in another format…`
   → choose 9:16 / 1:1 / 4:5 / 16:9 → the copy opens via Save-as prefilled `<name> 9x16`. Unit test: frame centre maps to
   the new centre, all layer bounds stay inside the frame.
-- Windows: tests spawn tsx through `process.execPath` (foundation did export.spec), `sanitizeName` rejects reserved names
-  (CON, PRN, AUX, NUL, COM1–9, LPT1–9) and trailing dots/spaces, Vite watch-ignore paths use forward slashes.
-- GitHub Actions `ci.yml`: matrix `ubuntu-latest` + `windows-latest`, Node 22, ffmpeg per OS, `npm ci`, Playwright
-  Chromium (ubuntu with deps), typecheck, unit, e2e, upload test-results on failure.
+- Windows: most hardening is done in the foundation (names, retries, watch-ignore, async CLI runner); look for anything
+  else Windows-specific while you work (paths, spawn, file locks) and fix it with a test where possible.
+- GitHub Actions `ci.yml` (neither runner image ships ffmpeg; the test helpers call bare `ffmpeg`/`ffprobe`):
+  matrix `[ubuntu-latest, windows-latest]`, `fail-fast: false`, Node 22 with the npm cache;
+  ubuntu: `sudo apt-get install -y --no-install-recommends ffmpeg`; windows: a pinned static build zip from GitHub
+  Releases (BtbN/FFmpeg-Builds versioned asset) cached with actions/cache and appended to `$GITHUB_PATH`, falling back
+  to `choco install ffmpeg -y --no-progress`; a fail-fast `ffmpeg -version && ffprobe -version` step; `npm ci` with
+  `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`; cache `~/.cache/ms-playwright` / `%LOCALAPPDATA%\ms-playwright` keyed on 1.56.1;
+  `npx playwright install --with-deps chromium` (ubuntu) / `npx playwright install chromium` (windows) (`--only-shell`
+  is enough since everything runs headless); typecheck → unit → e2e; on failure upload `test-results/` and the server log.
 
 ---
 
@@ -300,6 +377,9 @@ Video clips as layers, AI generation, cloud sync (kept in the UI's "Not availabl
 nice-to-have only if time allows.
 
 ## Testing contract per feature
+
+Pixel-level checks run in Playwright (real Chromium canvas) — use `browserImport` for "unit-style" pixel tests and
+`expectExportMatchesRender` for export comparisons; vitest is for pure logic and draw-call recordings (no canvas in Node).
 
 - A1: unit (recording ctx / injected canvases) for partner selection, effect state incl. layer-scale factor, background,
   dissolve endpoints; Playwright: export-vs-renderFrame pixel match inside a transition window and with blur/shadow/blend

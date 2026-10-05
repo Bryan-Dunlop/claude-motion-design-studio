@@ -176,6 +176,8 @@ export const CursorLayerSchema = z.object({
   size: z.number().positive(),
   color: z.string(),
   rippleColor: z.string(),
+  /** Sound played at every click (audio asset). Expanded into virtual clips when previewing/exporting, so it follows the clicks. */
+  clickSound: z.object({ assetId: z.string(), volume: z.number().min(0).max(4) }).nullable().default(null),
 });
 
 export const LayerSchema = z.discriminatedUnion('type', [

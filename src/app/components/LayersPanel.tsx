@@ -49,7 +49,9 @@ const ICON: Record<Layer['type'], string> = { text: 'T', image: 'â–£', shape: 'â
 export function LayersPanel() {
   const project = useEditor((s) => s.project);
   const selection = useEditor((s) => s.selection);
-  const missing = useEditor((s) => s.missingAssets);
+  const missingVisual = useEditor((s) => s.missingAssets);
+  const missingAudio = useEditor((s) => s.missingAudio);
+  const missing = { has: (id: string) => missingVisual.has(id) || missingAudio.has(id) };
   const select = useEditor((s) => s.select);
   const scene = project.scenes.find((s) => s.id === selection.sceneId);
 

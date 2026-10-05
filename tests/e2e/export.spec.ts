@@ -55,11 +55,11 @@ test('CLI render produces the same video, and reports missing ffmpeg clearly', a
   const name = `CLI ${Date.now()}`;
   await saveProject(request, name, project);
   const out = test.info().outputPath('cli.mp4');
-  const r = runRenderCli([path.join(WS, `${name}.motion`), out]);
+  const r = await runRenderCli([path.join(WS, `${name}.motion`), out]);
   expect(r.status, r.stderr + r.stdout).toBe(0);
   expect(probe(out)).toMatchObject({ codec_name: 'h264', width: 1920, height: 1080, nb_read_frames: '90' });
 
-  const missing = runRenderCli([path.join(WS, `${name}.motion`), out], { ...process.env, FFMPEG_PATH: '/definitely/not/ffmpeg' });
+  const missing = await runRenderCli([path.join(WS, `${name}.motion`), out], { ...process.env, FFMPEG_PATH: '/definitely/not/ffmpeg' });
   expect(missing.status).toBe(1);
   expect(missing.stderr).toContain('ffmpeg was not found');
   expect(missing.stderr).toContain('winget install');

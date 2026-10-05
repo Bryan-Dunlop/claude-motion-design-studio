@@ -99,7 +99,7 @@ export function App() {
           deleteLayers(st.selection.layerIds);
         }
       } else if (e.key === 'Escape') {
-        st.select({ layerIds: [] });
+        st.clearSelectionStep();
       }
     };
     window.addEventListener('keydown', onKey);

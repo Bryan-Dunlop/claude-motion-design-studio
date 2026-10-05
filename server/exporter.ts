@@ -160,10 +160,19 @@ function cleanup(job: ExportJob, removeOutput = false) {
   job.browser?.close().catch(() => undefined);
   if (removeOutput) {
     job.ffmpeg?.kill('SIGKILL');
-    job.ffmpeg?.once('close', () => fs.rmSync(job.outFile, { force: true }));
+    job.ffmpeg?.once('close', () => removeQuietly(job.outFile));
   }
 }
 
 export function publicJob(job: ExportJob) {
   return { id: job.id, status: job.status, frame: job.frame, total: job.total, error: job.error, outFile: job.outFile };
+}
+
+/** Delete a file, retrying briefly if Windows still has it locked; never throws (it runs in event callbacks). */
+function removeQuietly(file: string, attempt = 0) {
+  try {
+    fs.rmSync(file, { force: true });
+  } catch {
+    if (attempt < 5) setTimeout(() => removeQuietly(file, attempt + 1), 100);
+  }
 }

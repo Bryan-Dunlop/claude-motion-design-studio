@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyPreset, DEFAULT_PRESET, seededRandom, staggerStarts } from '../../src/shared/presets';
+import { applyPreset, DEFAULT_PRESET, presetApplies, seededRandom, staggerStarts } from '../../src/shared/presets';
 import { sampleKeyframes } from '../../src/shared/interpolate';
 import { makeLayer } from '../../src/shared/factories';
 import type { ShapeLayer } from '../../src/shared/schema';
@@ -39,6 +39,21 @@ describe('presets', () => {
     expect(l.keyframes.rotation[0].id).toBe('manual');
     l.keyframes = applyPreset(l, { ...DEFAULT_PRESET, kind: 'scale', phase: 'out', duration: 0.5 });
     expect(l.keyframes.scale).toHaveLength(4);
+  });
+});
+
+describe('preset applicability', () => {
+  it('skips presets whose properties are not animatable on the layer type (slide on a cursor)', () => {
+    const cursor = makeLayer({
+      id: 'c', name: 'C', type: 'cursor', visible: true, locked: false, start: 0, duration: 2, anchorX: 0, anchorY: 0,
+      x: 0, y: 0, scale: 1, rotation: 0, opacity: 1, keyframes: {}, points: [{ id: 'p', x: 0, y: 0, time: 0 }], clicks: [],
+      smoothing: 0, size: 30, color: '#fff', rippleColor: '#fff',
+    });
+    expect(presetApplies(cursor, { kind: 'slide', direction: 'up' })).toBe(false);
+    expect(applyPreset(cursor, { ...DEFAULT_PRESET, kind: 'slide' })).toBe(cursor.keyframes);
+    expect(presetApplies(cursor, { kind: 'fade', direction: 'up' })).toBe(true);
+    expect(Object.keys(applyPreset(cursor, { ...DEFAULT_PRESET, kind: 'fade' }))).toEqual(['opacity']);
+    expect(presetApplies(layer(), { kind: 'slide', direction: 'left' })).toBe(true);
   });
 });
 

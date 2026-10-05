@@ -23,17 +23,25 @@ export function NumberField({
   testId,
   tip,
   decimals = 2,
+  displayScale = 1,
+  suffix,
 }: {
   value: number;
   onCommit: (v: number) => void;
+  /** Step, min and max are in displayed units. */
   step?: number;
   min?: number;
   max?: number;
   testId?: string;
   tip?: string;
   decimals?: number;
+  /** Shown value = stored value × displayScale (e.g. 100 to edit a 0..1 fraction as a percentage). */
+  displayScale?: number;
+  /** Unit shown after the field, e.g. "%". */
+  suffix?: string;
 }) {
-  const shown = String(Math.round(value * 10 ** decimals) / 10 ** decimals);
+  const shownValue = value * displayScale;
+  const shown = String(Math.round(shownValue * 10 ** decimals) / 10 ** decimals);
   const [text, setText] = useState(shown);
   const editing = useRef(false);
   useEffect(() => {
@@ -43,10 +51,10 @@ export function NumberField({
     const v = Number(raw);
     if (raw.trim() === '' || !Number.isFinite(v)) return setText(shown);
     const clamped = Math.min(max ?? Infinity, Math.max(min ?? -Infinity, v));
-    if (clamped !== value) onCommit(clamped);
+    if (clamped !== shownValue) onCommit(clamped / displayScale);
     setText(String(Math.round(clamped * 10 ** decimals) / 10 ** decimals));
   };
-  return (
+  const input = (
     <input
       className="num"
       type="text"
@@ -70,11 +78,18 @@ export function NumberField({
         if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
           e.preventDefault();
           const mult = e.shiftKey ? 10 : 1;
-          const v = Math.round((value + (e.key === 'ArrowUp' ? step : -step) * mult) * 1e6) / 1e6;
+          const v = Math.round((shownValue + (e.key === 'ArrowUp' ? step : -step) * mult) * 1e6) / 1e6;
           commit(String(v));
         }
       }}
     />
+  );
+  if (!suffix) return input;
+  return (
+    <span className="num-suffix">
+      {input}
+      <span className="suffix">{suffix}</span>
+    </span>
   );
 }
 
@@ -125,22 +140,62 @@ export function ColorField({ value, onLive, testId }: { value: string; onLive: (
   );
 }
 
-export function Select<T extends string>({ value, options, onChange, testId }: { value: T; options: { value: T; label: string }[]; onChange: (v: T) => void; testId?: string }) {
+export function Select<T extends string>({
+  value,
+  options = [],
+  groups,
+  onChange,
+  testId,
+  tip,
+}: {
+  value: T;
+  options?: { value: T; label: string }[];
+  /** Options grouped under <optgroup> headings (rendered after `options`). */
+  groups?: { label: string; options: { value: T; label: string }[] }[];
+  onChange: (v: T) => void;
+  testId?: string;
+  tip?: string;
+}) {
   return (
-    <select value={value} onChange={(e) => onChange(e.target.value as T)} data-testid={testId}>
+    <select value={value} onChange={(e) => onChange(e.target.value as T)} data-testid={testId} title={tip}>
       {options.map((o) => (
         <option key={o.value} value={o.value}>
           {o.label}
         </option>
       ))}
+      {groups?.map((g) => (
+        <optgroup key={g.label} label={g.label}>
+          {g.options.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </optgroup>
+      ))}
     </select>
   );
 }
 
-export function Section({ title, children, defaultOpen = true }: { title: string; children: ReactNode; defaultOpen?: boolean }) {
+export function Section({
+  title,
+  children,
+  defaultOpen = true,
+  testId,
+  badge,
+}: {
+  title: string;
+  children: ReactNode;
+  defaultOpen?: boolean;
+  testId?: string;
+  /** Small marker after the title, e.g. "●" when an effect is active while the section is collapsed. */
+  badge?: ReactNode;
+}) {
   return (
-    <details className="section" open={defaultOpen}>
-      <summary>{title}</summary>
+    <details className="section" open={defaultOpen} data-testid={testId}>
+      <summary>
+        {title}
+        {badge ? <span className="section-badge">{badge}</span> : null}
+      </summary>
       <div className="section-body">{children}</div>
     </details>
   );

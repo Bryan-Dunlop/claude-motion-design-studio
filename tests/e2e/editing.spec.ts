@@ -1,23 +1,7 @@
 // Covers the remaining Phase 1/2 editor features: handles, panels, timeline bars, playback, imports, easing.
 import path from 'node:path';
-import { expect, test, type Page } from '@playwright/test';
-import { getState } from './helpers';
-
-const layerOf = async (page: Page, name: string) => (await getState(page)).project.scenes.flatMap((s) => s.layers).find((l) => l.name === name)!;
-const past = (page: Page) => page.evaluate(() => (window as any).__motion.useEditor.getState().past.length as number);
-
-async function drag(page: Page, from: { x: number; y: number }, dx: number, dy: number, modifiers: 'Shift' | null = null) {
-  await page.mouse.move(from.x, from.y);
-  if (modifiers) await page.keyboard.down(modifiers);
-  await page.mouse.down();
-  for (let i = 1; i <= 6; i++) await page.mouse.move(from.x + (dx * i) / 6, from.y + (dy * i) / 6);
-  await page.mouse.up();
-  if (modifiers) await page.keyboard.up(modifiers);
-}
-const center = async (page: Page, testId: string) => {
-  const b = (await page.getByTestId(testId).boundingBox())!;
-  return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
-};
+import { expect, test } from '@playwright/test';
+import { center, drag, getState, layerOf, past } from './helpers';
 
 test('preview handles: scale, rotate (Shift snaps 15°), Shift-constrained move; each drag is one undo step', async ({ page }) => {
   await page.goto('/');

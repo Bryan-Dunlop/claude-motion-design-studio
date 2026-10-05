@@ -1,27 +1,10 @@
 // renderFrame must depend only on (project, time): render twice -> identical draw calls.
 // (Pixel-level determinism in real Chromium is covered in tests/e2e/render.spec.ts.)
 import { describe, expect, it } from 'vitest';
-import { cursorPosition, frameCount, renderFrame, type Ctx2D } from '../../src/shared/renderFrame';
+import { cursorPosition, frameCount, renderFrame } from '../../src/shared/renderFrame';
 import { emptyProject, type CursorLayer } from '../../src/shared/schema';
 import { sampleProject } from '../fixtures/sampleProject';
-
-function recordingCtx(): { ctx: Ctx2D; log: string[] } {
-  const log: string[] = [];
-  const target: Record<string, unknown> = {};
-  const ctx = new Proxy(target, {
-    get(t, prop: string) {
-      if (prop === 'measureText') return (s: string) => ({ width: s.length * 10 });
-      if (prop in t) return t[prop];
-      return (...args: unknown[]) => log.push(`${prop}(${JSON.stringify(args)})`);
-    },
-    set(t, prop: string, v) {
-      t[prop] = v;
-      log.push(`${prop}=${JSON.stringify(v)}`);
-      return true;
-    },
-  });
-  return { ctx: ctx as unknown as Ctx2D, log };
-}
+import { recordingCtx } from './helpers/recordingCtx';
 
 describe('renderFrame', () => {
   it('is deterministic: same project + time -> identical draw calls', () => {

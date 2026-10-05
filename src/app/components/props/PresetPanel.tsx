@@ -1,18 +1,23 @@
 import { useState } from 'react';
-import { applyPreset, DEFAULT_PRESET, type PresetParams } from '../../../shared/presets';
+import { applyPreset, DEFAULT_PRESET, presetApplies, type PresetParams } from '../../../shared/presets';
 import { findLayer, useEditor } from '../../store';
 import { EasingPicker, NumberField, Row, Section, Select } from '../Fields';
 
 export function PresetPanel({ layerIds }: { layerIds: string[] }) {
   const [p, setP] = useState<PresetParams>(DEFAULT_PRESET);
   const commit = useEditor((s) => s.commit);
-  const apply = () =>
+  const apply = () => {
+    let skipped = 0;
     commit((d) => {
       for (const id of layerIds) {
         const hit = findLayer(d, id);
-        if (hit) hit.layer.keyframes = applyPreset(hit.layer, p);
+        if (!hit) continue;
+        if (!presetApplies(hit.layer, p)) skipped++;
+        else hit.layer.keyframes = applyPreset(hit.layer, p);
       }
     });
+    if (skipped) useEditor.getState().toast(`${skipped} layer${skipped > 1 ? 's' : ''} skipped: this effect isn't available on ${skipped > 1 ? 'them' : 'it'}.`);
+  };
   const remove = () =>
     commit((d) => {
       for (const id of layerIds) {

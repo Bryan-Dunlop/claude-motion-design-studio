@@ -3,6 +3,7 @@ import type { Draft } from 'immer';
 import { assetUrl } from '../shared/assetUrl';
 import { makeId } from '../shared/presets';
 import { makeLayer, makeScene } from '../shared/factories';
+import { safeFileName } from '../shared/names';
 import { ASPECTS, emptyProject, ProjectSchema, type Asset, type Layer, type Project, type Scene, type Settings, type ShapeKind } from '../shared/schema';
 import { deepCloneLayer, findLayer, useEditor } from './store';
 
@@ -331,7 +332,7 @@ async function uploadFile(file: File, keepId?: string): Promise<Asset> {
     headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': encodeURIComponent(file.name) },
   });
   if (hash !== (await sha256Hex(bytes))) throw new Error(`${file.name}: upload corrupted`);
-  const safe = file.name.replace(/[^\w.\-]+/g, '_');
+  const safe = safeFileName(file.name);
   const asset: Asset = { id: keepId ?? makeId('asset'), originalName: file.name, relativePath: `assets/${hash.slice(0, 8)}-${safe}`, type, hash };
   if (type === 'font') {
     asset.fontFamily = file.name.replace(/\.[^.]+$/, '').replace(/[^\w\- ]+/g, ' ').trim() || 'Imported font';

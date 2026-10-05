@@ -2,6 +2,7 @@ import { useRef } from 'react';
 import type { Layer, Scene } from '../../shared/schema';
 import { startDrag } from '../drag';
 import { snapToFrame, useEditor } from '../store';
+import { TransitionStrip } from './TransitionStrip';
 
 const LABEL_W = 170;
 
@@ -163,14 +164,7 @@ export function Timeline() {
                   title={`${s.name}: ${s.start.toFixed(2)}s → ${(s.start + s.duration).toFixed(2)}s. Drag to move, drag edges to change length.`}
                   data-testid={`scene-block-${s.name}`}
                 >
-                  {s.transition.type !== 'none' && (
-                    <div
-                      className="transition-strip"
-                      style={{ width: Math.min(s.transition.duration, s.duration) * zoom }}
-                      title={`Transition in: ${s.transition.type}, ${Math.min(s.transition.duration, s.duration).toFixed(2)}s`}
-                      data-testid={`transition-strip-${s.name}`}
-                    />
-                  )}
+                  <TransitionStrip project={project} scene={s} zoom={zoom} />
                   <div className="edge left" onPointerDown={(e) => dragScene(e, s, 'start')} />
                   <span>{s.name}</span>
                   <div className="edge right" onPointerDown={(e) => dragScene(e, s, 'end')} />

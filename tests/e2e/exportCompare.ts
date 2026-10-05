@@ -1,6 +1,6 @@
 // Shared helpers for export tests: upload/save/export through the real API, then compare MP4 frames
 // against renderFrame output (rendered by render.html in the same browser) pixel by pixel.
-import { execFileSync, spawnSync, type SpawnSyncReturns } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
@@ -120,8 +120,25 @@ export async function expectExportMatchesRender(
   return results;
 }
 
-/** Run the CLI renderer through node + tsx's CLI file (no bare `npx`, so it also works on Windows). */
-export function runRenderCli(args: string[], env: NodeJS.ProcessEnv = process.env): SpawnSyncReturns<string> {
+/**
+ * Run the CLI renderer through node + tsx's CLI file (no bare `npx`, so it also works on Windows). Async with a
+ * timeout shorter than the Playwright test timeout, so a hung render is reported instead of blocking the worker.
+ */
+export function runRenderCli(args: string[], env: NodeJS.ProcessEnv = process.env, timeoutMs = 150_000): Promise<{ status: number | null; stdout: string; stderr: string }> {
   const tsxCli = path.resolve('node_modules/tsx/dist/cli.mjs');
-  return spawnSync(process.execPath, [tsxCli, 'server/render-cli.ts', ...args], { encoding: 'utf8', timeout: 200_000, env });
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [tsxCli, 'server/render-cli.ts', ...args], { env });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => (stdout += d));
+    child.stderr.on('data', (d) => (stderr += d));
+    const timer = setTimeout(() => {
+      stderr += `\n[test] CLI render timed out after ${timeoutMs} ms`;
+      child.kill('SIGKILL');
+    }, timeoutMs);
+    child.on('close', (status) => {
+      clearTimeout(timer);
+      resolve({ status, stdout, stderr });
+    });
+  });
 }

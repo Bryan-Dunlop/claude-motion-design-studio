@@ -2,6 +2,7 @@
 // Output depends only on (project, time, scale, loaded resources): no clocks, no randomness.
 import { applyEasing } from './easing';
 import { resolveLayer } from './interpolate';
+import type { CanvasPool } from './canvas';
 import type { CursorLayer, ImageLayer, Layer, Project, Scene, ShapeLayer, TextLayer } from './schema';
 
 export type Ctx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
@@ -9,6 +10,12 @@ export type Ctx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D
 export interface RenderResources {
   /** assetId -> decoded image (absent = missing asset placeholder). */
   images: Map<string, CanvasImageSource>;
+  /**
+   * Offscreen/scratch canvases (transitions, layer isolation), owned by the caller. When absent, use fresh canvases
+   * from createRenderCanvas. renderFrame calls canvasPool.releaseAll() when a frame is finished and keeps no
+   * module-level canvas cache.
+   */
+  canvasPool?: CanvasPool;
 }
 
 const EMPTY_RESOURCES: RenderResources = { images: new Map() };

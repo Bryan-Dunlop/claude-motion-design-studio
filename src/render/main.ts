@@ -1,12 +1,13 @@
 // Render-only page (no editor UI). Used by headless Chromium for export, and by tests.
 import '../shared/fonts';
 import { assetUrl } from '../shared/assetUrl';
-import { RENDER_CONTEXT_OPTIONS } from '../shared/canvas';
+import { createCanvasPool, RENDER_CONTEXT_OPTIONS } from '../shared/canvas';
 import { loadResources } from '../shared/loadResources';
 import { frameCount, frameTime, renderFrame } from '../shared/renderFrame';
 import { ProjectSchema, type Project } from '../shared/schema';
 
 const params = new URLSearchParams(location.search);
+const canvasPool = createCanvasPool();
 const jobId = params.get('job');
 
 function makeCanvas(w: number, h: number) {
@@ -24,7 +25,7 @@ async function runJob(id: string) {
   document.body.appendChild(status);
   try {
     const { project } = (await (await fetch(`/api/jobs/${id}/project`)).json()) as { project: Project };
-    const res = await loadResources(project, (assetId) => `/api/jobs/${id}/asset/${assetId}`);
+    const res = { ...(await loadResources(project, (assetId) => `/api/jobs/${id}/asset/${assetId}`)), canvasPool };
     const { width, height } = project.settings;
     const { canvas, ctx } = makeCanvas(width, height);
     canvas.style.display = 'none';
@@ -53,7 +54,7 @@ async function runJob(id: string) {
 const api = {
   async render(projectJson: unknown, t: number, opts: { projectName?: string; scale?: number } = {}) {
     const project = ProjectSchema.parse(projectJson);
-    const res = await loadResources(project, (assetId) => assetUrl(opts.projectName ?? null, project.assets.find((a) => a.id === assetId)!));
+    const res = { ...(await loadResources(project, (assetId) => assetUrl(opts.projectName ?? null, project.assets.find((a) => a.id === assetId)!))), canvasPool };
     const scale = opts.scale ?? 1;
     const w = Math.round(project.settings.width * scale);
     const h = Math.round(project.settings.height * scale);

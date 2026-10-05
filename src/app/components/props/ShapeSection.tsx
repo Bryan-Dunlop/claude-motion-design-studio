@@ -1,6 +1,5 @@
 import { SHAPE_KINDS, type Scene, type ShapeKind, type ShapeLayer } from '../../../shared/schema';
-import { findLayer, useEditor } from '../../store';
-import { ColorField, NumberField, Row, Section, Select } from '../Fields';
+import { Row, Section, Select } from '../Fields';
 import type { LayerFields } from './common';
 
 export const SHAPE_LABELS: Record<ShapeKind, string> = {
@@ -13,7 +12,6 @@ export const SHAPE_LABELS: Record<ShapeKind, string> = {
 };
 
 export function ShapeSection({ layer, fields }: { scene: Scene; layer: ShapeLayer; fields: LayerFields }) {
-  const commit = useEditor((s) => s.commit);
   const { num, color, setStatic } = fields;
   return (
     <Section title="Shape">
@@ -24,12 +22,8 @@ export function ShapeSection({ layer, fields }: { scene: Scene; layer: ShapeLaye
       {num('height', 'Height', { min: 1 })}
       {layer.shape === 'rect' && num('cornerRadius', 'Corners', { min: 0 })}
       {color('fill', 'Fill')}
-      <Row label="Stroke" tip="Outline colour.">
-        <ColorField value={layer.stroke} onLive={(stroke) => commit((d) => void Object.assign(findLayer(d, layer.id)!.layer, { stroke }))} />
-      </Row>
-      <Row label="Stroke width" tip="Outline thickness in pixels. 0 = no outline.">
-        <NumberField value={layer.strokeWidth} min={0} onCommit={(v) => setStatic({ strokeWidth: v })} />
-      </Row>
+      {color('stroke', 'Outline')}
+      {num('strokeWidth', 'Outline width', { min: 0 })}
     </Section>
   );
 }

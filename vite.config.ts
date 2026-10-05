@@ -4,6 +4,8 @@ import { defineConfig } from 'vite';
 
 export default defineConfig({
   plugins: [react()],
+  // Per-checkout dependency cache (git worktrees must not share node_modules/.vite).
+  cacheDir: '.vite',
   build: {
     rollupOptions: {
       input: { main: resolve(import.meta.dirname, 'index.html'), render: resolve(import.meta.dirname, 'render.html') },

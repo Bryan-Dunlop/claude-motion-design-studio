@@ -46,25 +46,29 @@ export class Workspace {
   /**
    * Save project.json and copy any not-yet-stored assets in (byte-for-byte). `from` is the project this one was opened
    * as (Save as… / format copies): its folder is searched before the scratch store, because assets of an opened or
-   * imported project may exist only there.
+   * imported project may exist only there. `missing` lists the files found nowhere (saved as references only).
    */
-  save(name: string, data: unknown, from?: string): Project {
+  save(name: string, data: unknown, from?: string): { project: Project; missing: string[] } {
     const project = parseProject(data);
     const dir = this.projectDir(name);
     const fromDir = from && sanitizeName(from) ? this.projectDir(from) : null;
+    const missing: string[] = [];
     fs.mkdirSync(path.join(dir, 'assets'), { recursive: true });
     for (const a of project.assets) {
       const dest = safeJoin(dir, a.relativePath);
       if (fs.existsSync(dest)) continue;
       const src = this.resolveAsset(fromDir, a);
-      if (!src) continue;
+      if (!src) {
+        missing.push(a.originalName);
+        continue;
+      }
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       fs.copyFileSync(src, dest);
     }
     const tmp = path.join(dir, 'project.json.tmp');
     fs.writeFileSync(tmp, JSON.stringify(project, null, 2));
     renameWithRetry(tmp, path.join(dir, 'project.json'));
-    return project;
+    return { project, missing };
   }
 
   /** Store uploaded bytes untouched, addressed by sha256. */

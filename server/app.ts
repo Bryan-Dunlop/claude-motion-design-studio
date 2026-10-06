@@ -48,8 +48,8 @@ export async function startServer(opts: { port: number; workspace: string; host?
   }));
   /** ?from=<name>: the project it was opened as (Save as…), whose folder holds assets that may not be in scratch. */
   app.put('/api/projects/:name', json, wrap((req, res) => {
-    const project = ws.save(param(req, 'name'), req.body, req.query.from ? String(req.query.from) : undefined);
-    res.json({ name: sanitizeName(param(req, 'name')), project });
+    const { project, missing } = ws.save(param(req, 'name'), req.body, req.query.from ? String(req.query.from) : undefined);
+    res.json({ name: sanitizeName(param(req, 'name')), project, missing });
   }));
 
   // ---------------------------------------------------------------- assets

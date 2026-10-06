@@ -139,11 +139,11 @@ describe('Save as… copies assets from the project it came from', () => {
     fs.writeFileSync(path.join(root, 'Source.motion', asset.relativePath), bytes);
     fs.writeFileSync(path.join(root, 'Source.motion', 'project.json'), JSON.stringify(project));
 
-    // Without the source the asset can't be found (it isn't in scratch)…
-    ws.save('Lost', project);
+    // Without the source the asset can't be found (it isn't in scratch), and the save says so…
+    expect(ws.save('Lost', project).missing).toEqual(['logo.png']);
     expect(fs.existsSync(path.join(root, 'Lost.motion', asset.relativePath))).toBe(false);
     // …with it, Save as… carries it over.
-    ws.save('Copy 9x16', project, 'Source');
+    expect(ws.save('Copy 9x16', project, 'Source').missing).toEqual([]);
     expect(fs.readFileSync(path.join(root, 'Copy 9x16.motion', asset.relativePath))).toEqual(bytes);
     // An invalid source name is ignored rather than failing the save.
     expect(() => ws.save('Other', project, '../..')).not.toThrow();

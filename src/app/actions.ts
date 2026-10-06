@@ -337,11 +337,11 @@ export function copySelection(): boolean {
     S().toast(`Copied ${plural(keys.length, 'keyframe')}. Select a layer and press Ctrl+V to paste them at the playhead.`);
   } else if (selection.audioIds.length) {
     const clip = copyClips(project, selection.audioIds);
-    clipboard = clip;
+    clipboard = { ...clip, from: S().projectName };
     S().toast(`Copied ${plural(clip.clips.length, 'audio clip')}. Ctrl+V pastes at the playhead.`);
   } else if (selection.layerIds.length) {
     const clip = copyLayers(project, selection.layerIds);
-    clipboard = clip;
+    clipboard = { ...clip, from: S().projectName };
     S().toast(`Copied ${plural(clip.layers.length, 'layer')}. Ctrl+V pastes into the selected scene.`);
   } else return false;
   return true;
@@ -352,19 +352,20 @@ export function copySelection(): boolean {
  * playhead (x/y relative to where each layer is; `absolute` = Ctrl+Shift+V keeps the copied values); layers go into
  * the selected scene at the same timing; clips go to the playhead.
  */
-export function pasteClipboard(opts: { absolute?: boolean } = {}) {
+export async function pasteClipboard(opts: { absolute?: boolean } = {}) {
   const clip = clipboard;
   if (!clip) return S().toast('Nothing to paste yet: select keyframes, layers or audio clips and press Ctrl+C first.');
   if (clip.kind === 'keys') return pasteKeyframes(clip.keys, !opts.absolute);
+  const at = S().time;
+  const existing = clip.kind === 'layers' ? targetSceneId() : null;
+  if (clip.from && clip.from !== S().projectName) await adoptAssets(clip.from, clip.assets);
   if (clip.kind === 'clips') {
     let ids: string[] = [];
-    const at = S().time;
     S().commit((d) => void (ids = pasteClips(d, clip, at, () => makeId('clip'))));
     S().select({ audioIds: ids });
     return;
   }
-  const existing = targetSceneId();
-  const created = existing ? null : planNewScene(S().project, S().time).scene;
+  const created = existing ? null : planNewScene(S().project, at).scene;
   const sceneId = existing ?? created!.id;
   let ids: string[] = [];
   S().commit((d) => {
@@ -373,6 +374,30 @@ export function pasteClipboard(opts: { absolute?: boolean } = {}) {
   });
   S().select({ sceneId, layerIds: ids, audioIds: [] });
   if (created) showScene(created);
+}
+
+/**
+ * Pasting into another project: files that exist only in the source project's folder (e.g. it was imported from a
+ * .zip) are copied byte-for-byte into the workspace store first, so this project finds them and saves them. A file
+ * that is gone from the source too is pasted as missing (Relink…).
+ */
+async function adoptAssets(from: string, assets: readonly Asset[]) {
+  await Promise.all(
+    assets.map(async (a) => {
+      try {
+        if ((await fetch(assetUrl(null, a), { method: 'HEAD' })).ok) return; // already in the store
+        const r = await fetch(assetUrl(from, a));
+        if (!r.ok) return;
+        await api('/api/assets', {
+          method: 'POST',
+          body: await r.arrayBuffer(),
+          headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': encodeURIComponent(a.originalName) },
+        });
+      } catch {
+        /* pasted as missing */
+      }
+    }),
+  );
 }
 
 function pasteKeyframes(keys: CopiedKey[], relative: boolean) {
@@ -556,7 +581,7 @@ export async function listProjects() {
 function putProject(name: string, project: Project) {
   const from = S().projectName;
   const q = from && from !== name ? `?from=${encodeURIComponent(from)}` : '';
-  return api<{ name: string; project: Project }>(`/api/projects/${encodeURIComponent(name)}${q}`, {
+  return api<{ name: string; project: Project; missing?: string[] }>(`/api/projects/${encodeURIComponent(name)}${q}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(project),
@@ -571,6 +596,7 @@ export async function saveProject(name?: string): Promise<boolean> {
     const r = await putProject(target, project);
     S().markSaved(project, r.name);
     S().toast(`Saved ${r.name}.motion`);
+    warnMissingFiles(r.missing);
     return true;
   } catch (e) {
     S().toast(`Save failed: ${(e as Error).message}`, 'error');
@@ -578,11 +604,19 @@ export async function saveProject(name?: string): Promise<boolean> {
   }
 }
 
+/** Files the server could not find while saving: the project still refers to them, without the file. */
+function warnMissingFiles(missing: string[] | undefined) {
+  if (!missing?.length) return;
+  const n = missing.length;
+  S().toast(`${n === 1 ? '1 file was' : `${n} files were`} not found and could not be saved with the project: ${missing.join(', ')}. Use Relink… to point to ${n === 1 ? 'it' : 'them'}, then save again.`, 'error');
+}
+
 /** Save `copy` as a new project called `name` and open it (Make a copy in another format…). */
 export async function saveCopyAs(copy: Project, name: string): Promise<boolean> {
   try {
     const r = await putProject(name, copy);
     S().loadProject(ProjectSchema.parse(r.project), r.name);
+    warnMissingFiles(r.missing);
     return true;
   } catch (e) {
     S().toast(`Save failed: ${(e as Error).message}`, 'error');

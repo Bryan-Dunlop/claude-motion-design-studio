@@ -5,6 +5,8 @@ import { useEditor } from './store';
 export interface DragHandlers {
   onMove: (dx: number, dy: number, e: PointerEvent) => void;
   onEnd?: (moved: boolean) => void;
+  /** Runs before the gesture ends: last edits that belong to the same undo step (e.g. tidying up after a drop). */
+  beforeEnd?: (moved: boolean) => void;
   /** Pixels before the drag starts counting (avoids accidental moves on click). */
   threshold?: number;
   history?: boolean;
@@ -28,6 +30,7 @@ export function startDrag(e: React.PointerEvent | PointerEvent, h: DragHandlers)
     window.removeEventListener('pointermove', move);
     window.removeEventListener('pointerup', up);
     window.removeEventListener('pointercancel', up);
+    h.beforeEnd?.(moved);
     if (useHistory) useEditor.getState().endGesture();
     h.onEnd?.(moved);
   };

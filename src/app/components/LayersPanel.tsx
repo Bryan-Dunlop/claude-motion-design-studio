@@ -70,7 +70,7 @@ export function LayersPanel() {
             key={s.id}
             className={s.id === selection.sceneId ? 'sel' : ''}
             onClick={() => {
-              select({ sceneId: s.id, layerIds: [] });
+              select({ sceneId: s.id, layerIds: [], audioIds: [] });
               const t = useEditor.getState().time;
               if (t < s.start || t >= s.start + s.duration) useEditor.getState().setTime(s.start);
             }}

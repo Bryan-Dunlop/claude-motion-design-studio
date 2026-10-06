@@ -18,7 +18,8 @@ export function Properties() {
   const selected = selection.layerIds.map((id) => findLayer(project, id)).filter((x): x is NonNullable<typeof x> => !!x);
   const scene = project.scenes.find((s) => s.id === selection.sceneId);
 
-  if (selected.length === 1) return <LayerProps scene={selected[0].scene} layer={selected[0].layer} time={time} />;
+  // Keyed: another layer / clip / scene gets fresh fields (a half-typed value can never move over to it).
+  if (selected.length === 1) return <LayerProps key={selected[0].layer.id} scene={selected[0].scene} layer={selected[0].layer} time={time} />;
   if (selected.length > 1)
     return (
       <div className="props">
@@ -28,10 +29,10 @@ export function Properties() {
         <StaggerPanel layers={selected.map((s) => s.layer)} />
       </div>
     );
-  if (selection.audioIds.length > 0) return <AudioClipProps clipIds={selection.audioIds} />;
+  if (selection.audioIds.length > 0) return <AudioClipProps key={selection.audioIds.join()} clipIds={selection.audioIds} />;
   return (
     <div className="props">
-      {scene && <SceneProps scene={scene} />}
+      {scene && <SceneProps key={scene.id} scene={scene} />}
       <ProjectSettings />
     </div>
   );

@@ -258,6 +258,25 @@ export function keyAt(keys: Keyframe[] | undefined, t: number, fps: number): Key
 }
 
 /**
+ * After keyframes `moved` were dragged: a moved key that lands on the frame of another key of the same property
+ * replaces it (like pasting onto a frame), so a frame never holds two keys of one property. Of two moved keys pushed
+ * onto one frame (clamped at the layer's start or end), the first one stays.
+ */
+export function dropKeysUnderMoved(draft: Draft<Project>, moved: ReadonlySet<string>) {
+  const half = 0.5 / draft.settings.fps;
+  for (const scene of draft.scenes)
+    for (const layer of scene.layers)
+      for (const [prop, keys] of Object.entries(layer.keyframes)) {
+        const kept: Keyframe[] = [];
+        for (const k of keys.filter((k) => moved.has(k.id))) if (!kept.some((m) => Math.abs(m.time - k.time) < half)) kept.push(k);
+        if (!kept.length) continue;
+        const stays = (k: Keyframe) => (moved.has(k.id) ? kept.includes(k) : !kept.some((m) => Math.abs(m.time - k.time) < half));
+        if (keys.every(stays)) continue;
+        layer.keyframes[prop] = keys.filter(stays);
+      }
+}
+
+/**
  * Set a property the way an animator expects: if the property is animated, write a keyframe at the
  * playhead (creating one if needed); otherwise change the static value.
  */

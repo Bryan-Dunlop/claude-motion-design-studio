@@ -51,15 +51,31 @@ function formatTime(t: number) {
   return `${String(m).padStart(2, '0')}:${s.toFixed(2).padStart(5, '0')}`;
 }
 
+const NOT_TEXT = ['checkbox', 'radio', 'button', 'submit', 'reset', 'file', 'color', 'range'];
+
 /**
- * Keys typed into a text field belong to it. Checkboxes and other button-like inputs keep Space/Enter (to toggle
- * them) but don't swallow the editor shortcuts (Delete, Ctrl+Z…).
+ * Keys the focused control uses itself. Text fields take every key. Dropdowns, sliders, checkboxes and other
+ * button-like inputs take only their own keys (Space/Enter, a dropdown's or slider's arrows and Home/End/Page keys,
+ * a dropdown's type-to-pick letters), so the editor shortcuts (Ctrl+Z, Delete, Esc…) still work right after picking
+ * a value.
  */
-function isTyping(el: HTMLElement, key: string) {
-  if (el.isContentEditable || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') return true;
-  if (el.tagName !== 'INPUT') return false;
-  if (['checkbox', 'radio', 'button', 'submit', 'reset', 'file', 'color'].includes((el as HTMLInputElement).type)) return key === ' ' || key === 'Enter';
-  return true;
+function isTyping(el: HTMLElement, e: KeyboardEvent) {
+  if (el.isContentEditable || el.tagName === 'TEXTAREA') return true;
+  const select = el.tagName === 'SELECT';
+  if (!select && el.tagName !== 'INPUT') return false;
+  const type = select ? '' : (el as HTMLInputElement).type;
+  if (!select && !NOT_TEXT.includes(type)) return true;
+  if (e.ctrlKey || e.metaKey || e.altKey) return false;
+  const k = e.key;
+  if (k === ' ' || k === 'Enter') return type !== 'range';
+  if (k.startsWith('Arrow') || k === 'Home' || k === 'End' || k === 'PageUp' || k === 'PageDown') return select || type === 'range';
+  return select && k.length === 1;
+}
+
+/** Finish the edit in a focused field: typed values commit on blur. */
+function commitFocusedField() {
+  const el = document.activeElement as HTMLElement | null;
+  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) el.blur();
 }
 
 function useWindowHeight() {
@@ -108,12 +124,14 @@ export function App() {
   // Esc clears keyframes first (store.clearSelectionStep). Open menus take Esc themselves.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const typing = isTyping(e.target as HTMLElement, e.key);
+      const typing = isTyping(e.target as HTMLElement, e);
       const st = useEditor.getState();
       const mod = e.ctrlKey || e.metaKey;
       const key = e.key.toLowerCase();
       if (mod && key === 's') {
         e.preventDefault();
+        // Save what is on screen, including a value still being typed.
+        commitFocusedField();
         if (e.shiftKey) setDialog('saveAs');
         else void save();
         return;
@@ -162,6 +180,16 @@ export function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // A press anywhere else first finishes the edit in progress, so a typed value lands on the item it was typed for, as
+  // its own undo step, before the press selects something else or starts a drag (capture phase: before any handler).
+  useEffect(() => {
+    const onPointerDown = (e: PointerEvent) => {
+      if (!document.activeElement?.contains(e.target as Node)) commitFocusedField();
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    return () => document.removeEventListener('pointerdown', onPointerDown, true);
   }, []);
 
   const confirmDiscard = () => !isDirty(useEditor.getState()) || confirm('You have unsaved changes. Discard them?');

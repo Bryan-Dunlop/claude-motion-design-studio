@@ -3,7 +3,7 @@ import { propLabel } from '../../shared/propLabels';
 import { ANIMATABLE, type Layer, type Scene } from '../../shared/schema';
 import { startDrag } from '../drag';
 import { clampTimelineHeight, usePrefs } from '../prefs';
-import { snapToFrame, useEditor } from '../store';
+import { dropKeysUnderMoved, snapToFrame, useEditor } from '../store';
 import { timeSnapper, useTimeSnapLine } from '../timelineSnap';
 import { AudioRows } from './AudioRows';
 import { TransitionStrip } from './TransitionStrip';
@@ -87,7 +87,7 @@ export function Timeline() {
   // Scene block: body moves, edges trim. Its layers move with its start, so they aren't snap targets then.
   const dragScene = (e: React.PointerEvent, s: Scene, mode: 'move' | 'start' | 'end') => {
     e.stopPropagation();
-    st().select({ sceneId: s.id, layerIds: [] });
+    st().select({ sceneId: s.id, layerIds: [], audioIds: [] });
     const { start, duration } = s;
     const own = new Set(s.layers.map((l) => l.id));
     const snap = timeSnapper({
@@ -205,6 +205,8 @@ export function Timeline() {
         });
         st().setTime(sc.start + l.start + Math.min(Math.max(0, localTime + dt), l.duration));
       },
+      // Dropped onto another key of the same property: the moved key replaces it (same undo step as the drag).
+      beforeEnd: (moved) => moved && st().updateGesture((d) => dropKeysUnderMoved(d, new Set(origin.keys()))),
       onEnd: (moved) => {
         snap.done();
         if (moved) return;

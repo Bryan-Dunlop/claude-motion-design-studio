@@ -15,10 +15,11 @@ export interface CopiedKey {
   source?: string;
 }
 
+/** `from`: the saved project the layers / clips were copied from (its folder may hold their files). */
 export type Clipboard =
   | { kind: 'keys'; keys: CopiedKey[] }
-  | { kind: 'layers'; layers: Layer[]; assets: Asset[] }
-  | { kind: 'clips'; clips: AudioClip[]; assets: Asset[] };
+  | { kind: 'layers'; layers: Layer[]; assets: Asset[]; from?: string | null }
+  | { kind: 'clips'; clips: AudioClip[]; assets: Asset[]; from?: string | null };
 
 const tidy = (v: number) => Math.round(v * 1e6) / 1e6;
 

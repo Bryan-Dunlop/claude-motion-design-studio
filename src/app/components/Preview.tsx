@@ -203,7 +203,7 @@ export function Preview() {
   const startMarquee = (e: React.PointerEvent, from: Pt) => {
     const st = useEditor.getState();
     const base = e.shiftKey ? st.selection.layerIds : [];
-    if (!e.shiftKey) st.select({ layerIds: [] });
+    if (!e.shiftKey) st.select({ layerIds: [], audioIds: [] });
     const candidates = placed.filter((p) => !p.layer.locked);
     startDrag(e, {
       history: false,

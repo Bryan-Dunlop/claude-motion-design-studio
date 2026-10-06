@@ -44,6 +44,7 @@ export function NumberField({
   const shown = String(Math.round(shownValue * 10 ** decimals) / 10 ** decimals);
   const [text, setText] = useState(shown);
   const editing = useRef(false);
+  const cancelled = useRef(false);
   useEffect(() => {
     if (!editing.current) setText(shown);
   }, [shown]);
@@ -54,6 +55,7 @@ export function NumberField({
     if (clamped !== shownValue) onCommit(clamped / displayScale);
     setText(String(Math.round(clamped * 10 ** decimals) / 10 ** decimals));
   };
+  useCommitOnUnmount(editing, text, commit);
   const input = (
     <input
       className="num"
@@ -66,13 +68,17 @@ export function NumberField({
       onChange={(e) => setText(e.target.value)}
       onBlur={(e) => {
         editing.current = false;
+        if (cancelled.current) {
+          cancelled.current = false;
+          return setText(shown);
+        }
         commit(e.target.value);
       }}
       onKeyDown={(e) => {
         if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
         if (e.key === 'Escape') {
-          setText(shown);
-          editing.current = false;
+          // Escape throws the typed text away (the blur that follows must not commit it).
+          cancelled.current = true;
           (e.target as HTMLInputElement).blur();
         }
         if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
@@ -95,12 +101,19 @@ export function NumberField({
 
 export function TextField({ value, onCommit, multiline, testId }: { value: string; onCommit: (v: string) => void; multiline?: boolean; testId?: string }) {
   const [text, setText] = useState(value);
+  const editing = useRef(false);
   useEffect(() => setText(value), [value]);
+  const commit = (t: string) => t !== value && onCommit(t);
+  useCommitOnUnmount(editing, text, commit);
   const props = {
     value: text,
     'data-testid': testId,
+    onFocus: () => (editing.current = true),
     onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setText(e.target.value),
-    onBlur: () => text !== value && onCommit(text),
+    onBlur: () => {
+      editing.current = false;
+      commit(text);
+    },
   };
   return multiline ? (
     <textarea rows={3} {...props} />
@@ -109,13 +122,34 @@ export function TextField({ value, onCommit, multiline, testId }: { value: strin
   );
 }
 
+/**
+ * A field that is removed while a typed value is pending (its panel switched to another item) still commits it, to
+ * the item it was typed for: `commit` is the field's latest one.
+ */
+function useCommitOnUnmount(editing: React.RefObject<boolean>, text: string, commit: (t: string) => unknown) {
+  const latest = useRef({ text, commit });
+  latest.current = { text, commit };
+  useEffect(
+    () => () => {
+      if (editing.current) latest.current.commit(latest.current.text);
+    },
+    [editing],
+  );
+}
+
 /** Native colour picker; the whole pick (many input events) is one undo step. */
 export function ColorField({ value, onLive, testId }: { value: string; onLive: (v: string) => void; testId?: string }) {
   const ref = useRef<HTMLInputElement>(null);
+  const picking = useRef(false);
   const hex = value.length > 7 ? value.slice(0, 7) : value;
   useEffect(() => {
     const el = ref.current!;
-    const end = () => useEditor.getState().endGesture();
+    // Ends only the gesture this picker began: a drag that starts while the swatch still has focus keeps its own.
+    const end = () => {
+      if (!picking.current) return;
+      picking.current = false;
+      useEditor.getState().endGesture();
+    };
     el.addEventListener('change', end);
     el.addEventListener('blur', end);
     return () => {
@@ -131,7 +165,10 @@ export function ColorField({ value, onLive, testId }: { value: string; onLive: (
         value={hex}
         data-testid={testId}
         onChange={(e) => {
-          useEditor.getState().beginGesture();
+          if (!picking.current) {
+            useEditor.getState().beginGesture();
+            picking.current = true;
+          }
           onLive(e.target.value + (value.length > 7 ? value.slice(7) : ''));
         }}
       />

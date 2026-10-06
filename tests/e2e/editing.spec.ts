@@ -154,6 +154,8 @@ test('imports SVG and fonts byte-for-byte; font becomes selectable; spring easin
   await page.goto('/');
   await page.getByTestId('file-input').setInputFiles([path.resolve('tests/fixtures/shape.svg'), path.resolve('tests/fixtures/TestFont.woff2')]);
   await expect(page.getByTestId('layer-item-shape')).toBeVisible();
+  // The files are imported one after another: wait for the font too before reading the asset list.
+  await expect.poll(async () => (await getState(page)).project.assets.length).toBe(2);
   let st = await getState(page);
   expect(st.project.assets.map((a) => [a.type, a.originalName])).toEqual([
     ['svg', 'shape.svg'],

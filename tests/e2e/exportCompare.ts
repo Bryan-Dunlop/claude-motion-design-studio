@@ -149,8 +149,9 @@ export function runRenderCli(args: string[], env: NodeJS.ProcessEnv = process.en
  * gets its own process group, so a test can press Ctrl+C (SIGINT to the group) like a terminal does.
  */
 export function startRenderCli(args: string[], env: NodeJS.ProcessEnv = process.env, timeoutMs = 150_000, opts: { detached?: boolean } = {}) {
-  const tsxCli = path.resolve('node_modules/tsx/dist/cli.mjs');
-  const child = spawn(process.execPath, [tsxCli, 'server/render-cli.ts', ...args], { env, detached: opts.detached });
+  // Like `npm run render`: tsx loaded into the CLI's own process. (The tsx command runs the script in a child process
+  // and SIGKILLs it when it doesn't confirm a Ctrl+C within 30 ms, which skips the cleanup on a busy machine.)
+  const child = spawn(process.execPath, ['--import', 'tsx', 'server/render-cli.ts', ...args], { env, detached: opts.detached });
   let stdout = '';
   let stderr = '';
   child.stdout.on('data', (d) => (stdout += d));

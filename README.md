@@ -125,8 +125,8 @@ about 64 s. Blur and transitions cost extra while they are on screen (see `docs/
 ## Works (tested)
 
 Everything below is covered by automated tests that pass. Run `npm test`:
-**323 unit tests** (vitest) and **82 end-to-end tests** (Playwright, real Chromium + ffmpeg), all passing twice in a row
-on the merged v2 branch.
+**354 unit tests** (vitest) and **105 end-to-end tests** (Playwright, real Chromium + ffmpeg), all passing on Linux; CI
+runs them on Ubuntu and Windows.
 
 The exact test names and measured numbers for every v2 feature are in [`docs/lane-a.md`](docs/lane-a.md) (rendering:
 effects, transitions, text animation, shapes) and [`docs/lane-b.md`](docs/lane-b.md) (sound, timeline/preview, export,
@@ -160,6 +160,9 @@ timeline, playback, SVG/font import, cursor paths; v1 projects open in v2.
   next; Escape cancels it; Ctrl+S saves it; undo/redo/Delete work right after picking from a dropdown or a colour.
 - **Export & formats** — 100/50/25 % sizes incl. odd sizes, quality levels, include-audio, unique file names, CLI flags,
   PNG still identical to the video frame, *Make a copy in another format*, Windows-safe names, Notepad/PowerShell files.
+- **When an export goes wrong** — a crashed or frozen render page, ffmpeg dying or stuck, Ctrl+C in the CLI: the export
+  stops with a plain message and leaves no half-written MP4; a slow but healthy finish (slow preset, 4K) is not cut
+  off; 1200 click sounds export; a mistyped project folder gets one plain line from the CLI.
 
 ## Not implemented
 
@@ -169,8 +172,8 @@ timeline, playback, SVG/font import, cursor paths; v1 projects open in v2.
 ## Known limitations
 
 - **Windows**: developed on Linux; the CI workflow (`.github/workflows/ci.yml`) runs the whole suite on
-  `windows-latest` as well as Ubuntu, and both pass. One end-to-end test (a frozen fake ffmpeg) needs a POSIX shell, so
-  it runs on Linux/macOS only.
+  `windows-latest` as well as Ubuntu, and both pass. A few end-to-end tests fake a frozen ffmpeg or stop processes with
+  POSIX tools, so they run on Linux/macOS only.
 - **Preview vs export**: the preview draws in *your* browser, export in headless Chromium. In Chrome/Edge they match.
 - **Export speed**: CPU-only rendering, roughly 1 minute per 15 s of 4K on 4 cores; blur transitions cost ~0.5 s per
   4K frame while they run.

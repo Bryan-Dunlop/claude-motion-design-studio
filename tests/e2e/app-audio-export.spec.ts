@@ -128,13 +128,14 @@ test('missing audio files are skipped with a warning; no audible clips → no au
   expect(streams(silent.outFile).map((s) => s.codec_type)).toEqual(['video']);
 });
 
-test('watchdog: an ffmpeg that never exits after the last frame is killed and the export fails', async () => {
+test('watchdog: an ffmpeg that makes no progress after the last frame is killed and the export fails', async () => {
   test.skip(process.platform === 'win32', 'uses a POSIX shell script as a fake ffmpeg');
   const dir = test.info().outputPath('fake');
   fs.mkdirSync(dir, { recursive: true });
   const fake = path.join(dir, 'ffmpeg');
   const pidFile = path.join(dir, 'pid');
-  // Answers -version; otherwise swallows the frames, then hangs ignoring SIGTERM (like the real hang case).
+  // Answers -version; otherwise swallows the frames, then hangs ignoring SIGTERM (like the real hang case), reporting no
+  // progress and writing nothing.
   fs.writeFileSync(fake, `#!/bin/sh\nif [ "$1" = "-version" ]; then echo fake; exit 0; fi\necho $$ > "${pidFile}"\ntrap '' TERM\ncat > /dev/null\nexec sleep 600\n`, { mode: 0o755 });
   const projectDir = path.join(dir, 'Tiny.motion');
   fs.mkdirSync(projectDir);
@@ -143,7 +144,7 @@ test('watchdog: an ffmpeg that never exits after the last frame is killed and th
   const t0 = Date.now();
   const r = await runRenderCli([projectDir, path.join(dir, 'out.mp4')], { ...process.env, FFMPEG_PATH: fake, MOTION_FFMPEG_EXIT_TIMEOUT_MS: '1500', MOTION_WORKSPACE: path.join(dir, 'ws') }, 60_000);
   expect(r.status, r.stdout + r.stderr).toBe(1);
-  expect(r.stderr).toContain('ffmpeg did not finish within 1.5 s after the last frame');
+  expect(r.stderr).toContain('ffmpeg made no progress for 1.5 s while finishing the video, so it was stopped.');
   expect(Date.now() - t0).toBeLessThan(30_000);
   // The stuck process is really gone (SIGKILL, since it ignores SIGTERM). If the CLI exited before reaping it, it can
   // briefly linger as a zombie (state Z) — dead, just not cleaned up yet.

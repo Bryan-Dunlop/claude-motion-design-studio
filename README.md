@@ -1,12 +1,11 @@
 # Motion Studio
 
-A local motion-design editor that runs in your browser and saves to your own disk. You build animations from scenes, layers and keyframes, then export an H.264 MP4. It needs no account, makes no AI/API calls, and edits, plays back and saves fully offline.
+A local motion-design editor that runs in your browser and saves to your own disk. You build short videos from
+scenes, layers and keyframes, add sound, and export an H.264 MP4. There is no account and no AI/API calls; editing,
+playback and saving work fully offline.
 
-> **v2 in progress** on this branch: effects, scene transitions, text animation, new shapes, audio, snapping/guides and
-> export options are being added (see [docs/v2-plan.md](docs/v2-plan.md)). Until that work lands, this README describes
-> what is implemented and tested today.
-
-The deliverable is the **editor itself**. It opens on an empty project and never creates demo content, and it renders video only when you click **Export MP4** (or run the CLI).
+The deliverable is the **editor itself**. It opens on an empty project, never creates demo content, and renders video
+only when you click **Export MP4** (or run the CLI).
 
 ---
 
@@ -19,8 +18,9 @@ You need **Node.js 20+** (tested with 22), **ffmpeg** on your PATH, and a deskto
 1. Install Node.js LTS: `winget install OpenJS.NodeJS.LTS` (or download it from nodejs.org).
 2. Install ffmpeg: `winget install --id Gyan.FFmpeg`.
 3. **Close and reopen** your terminal so the new PATH is picked up.
-4. Check both tools: `node -v` should print v20 or higher, and `ffmpeg -version` should print a version banner.
-5. In the project folder, run `npm install`. This also downloads the headless Chromium build that export uses (about 150 MB, one time).
+4. Check both: `node -v` should print v20 or higher, and `ffmpeg -version` should print a version banner.
+5. In the project folder, run `npm install`. This also downloads the headless Chromium build that export uses
+   (about 150 MB, one time).
 6. Run `npm run dev`.
 7. Open **http://127.0.0.1:5173** in Chrome or Edge.
 
@@ -32,9 +32,26 @@ npm install
 npm run dev                # → http://127.0.0.1:5173
 ```
 
-If the Chromium download in step 5 fails (corporate proxy, offline machine), run `npx playwright install chromium` later. Editing works without it; only export needs it.
+If the Chromium download fails (corporate proxy, offline machine), run `npx playwright install chromium` later.
+Editing works without it; only export needs it.
 
 Projects are saved in `./workspace/` by default. Set `MOTION_WORKSPACE=<folder>` to use a different location.
+
+---
+
+## What you can make
+
+| | |
+|---|---|
+| **Layers** | Text, images (PNG, JPG, WebP, SVG), shapes (rectangle, ellipse, triangle, star, polygon, line) and an animated mouse **cursor** with click ripples. |
+| **Animation** | Keyframes on any animatable property, with easing (steady, speed up, slow down, smooth, custom curve, spring) and a live curve preview. **Presets**: fade, slide, scale and *Draw on* (an outline drawing itself), in or out. **Stagger** for several layers. |
+| **Text animation** | One-click styles — *Words rise*, *Letters fade*, *Typewriter* (with caret), *Lines slide up*, *Blur in*, *Words fade out*, *Backspace* — or customise by letter / word / line, effect, order, timing and easing. Kerning stays exact. |
+| **Scenes & transitions** | Scenes follow each other on the timeline. *Transition into this scene*: cross-fade, slide over, push, wipe, zoom or blur, with direction, length and easing, a ▶ Preview button and *Apply to all scenes*. Each scene can have its own background colour. |
+| **Look** | Blur, drop shadow and blend modes on any layer; solid or gradient fills for shapes and text; outlines; *trim paths* (show part of an outline, animate it to draw on). Effects scale with the layer. |
+| **Sound** | Music and sound effects (MP3, WAV, OGG, M4A, AAC, FLAC) on audio rows with waveforms, trims, volume and fades; a *Click sound* that plays at every cursor click and follows the clicks. |
+| **Layout help** | Snapping to the frame, other layers and safe areas (magenta guides; hold Ctrl/⌘ to move freely), a Guides overlay with a Reels/TikTok safe zone for 9:16, marquee selection. |
+| **Formats** | 16:9, 9:16, 1:1, 4:5 or custom, up to 4K. *Make a copy in another format…* turns a 16:9 project into a 9:16 (or 1:1 / 4:5) copy with everything scaled to fit. |
+| **Export** | MP4 at 100 / 50 / 25 % size, three quality levels, with or without sound; a PNG of the current frame; the same render from a terminal. |
 
 ---
 
@@ -42,14 +59,15 @@ Projects are saved in `./workspace/` by default. Set `MOTION_WORKSPACE=<folder>`
 
 | Area | What it does |
 |---|---|
-| **Toolbar** | New / Open / Save / Save as, Export & Import `.zip`, Undo / Redo, add Scene / Text / Rect / **Shape ▾** (rectangle, ellipse, triangle, star, polygon, line) / Cursor, Import asset, **Export MP4**. "More ▾" lists features that are *not available* yet. |
-| **Left panel** | **Scenes**: add, rename (double-click), reorder ↑↓, duplicate ⧉, delete ✕. **Layers** of the selected scene, top = front: show/hide, lock, reorder, rename, duplicate, delete. **Assets**: missing files show a **Relink…** button. |
-| **Preview** | Click to select, Shift-click to add to the selection, and drag to move (hold Shift to lock to one axis). Corner handles scale, and the round handle above rotates (Shift snaps to 15°). Cursor layers show their path, and you drag the numbered points to move them. Drop image or font files here to import them. |
-| **Properties** (right) | Transform, opacity, typography, alignment, spacing and colour. The **◆** next to a property adds or removes a keyframe at the playhead. When the playhead is on a keyframe, an **easing picker** appears with a live curve and a plain-language description. **Animation presets** (fade, slide or scale; in or out) and **Stagger** (when several layers are selected) also live here. With nothing selected, this panel shows **Project settings**: duration, aspect ratio (16:9, 9:16, 1:1, 4:5, custom), resolution, fps and background. Every control has a tooltip. |
-| **Timeline** | Click or drag the ruler to scrub. Drag scene blocks to move them, and drag their edges to resize. Drag layer bars to move them in time, and drag their edges to trim. Drag the ◆ diamonds to retime keyframes. Zoom with the slider or Ctrl + mouse wheel. |
-| **Playback bar** | Play/pause, frame step, replay, loop, timecode and frame counter. |
+| **Toolbar** | New / Open / Save / Save as, **File ▾** (Export .zip / Import .zip), Undo / Redo, add Scene / Text / Rect / **Shape ▾** / Cursor, Import asset, **Export MP4**. "More ▾" lists features that are *not available* yet. |
+| **Left panel** | **Scenes** (add, rename by double-click, reorder, duplicate, delete). **Layers** of the selected scene, top = front (show/hide, lock, reorder, rename, duplicate, delete). **Assets** (images, fonts, sounds; sounds have *+ at playhead*; missing files show **Relink…**). |
+| **Preview** | Click to select, Shift-click to add, drag on empty space for a marquee. Drag to move (snaps; hold Shift to lock to one axis, Ctrl/⌘ to move freely), corner handles scale, the round handle rotates (Shift snaps to 15°). Cursor layers show their path with draggable points. Drop image, font or sound files here to import them. |
+| **Properties** (right) | Everything about the selection, in plain language with a tooltip on every control. **◆** next to a property adds/removes a keyframe at the playhead. Selected keyframes show their easing at the top. Sections for typography or shape, text animation, outline (trim), effects and presets open when they're in use. With nothing selected: scene settings (background, transition) and **Project settings** (duration, aspect, resolution, fps, background, *Make a copy in another format…*). |
+| **Timeline** | Ruler (click/drag to scrub), scene blocks (drag to move, edges to resize; hatched strip = transition), layer bars (move, trim), keyframe diamonds (click to select, drag to retime; ▸ expands one row per property), the **Audio** block (clips with waveforms: move, trim either end) and ● cursor-click markers. Drags snap to the playhead, scene edges, other bars, keyframes and clicks. Drag the divider above it to resize; zoom with the slider or Ctrl + wheel. |
+| **Playback bar** | Play/pause, frame step, replay, loop, timecode and frame counter, **Snap**, **Guides**, **🔊 Sound** (preview only) and **PNG** (save this frame). |
 
-**How keyframes behave:** once a property has at least one keyframe, any change to it (typing a value or dragging in the preview) writes a keyframe at the playhead. Properties with no keyframes just change their fixed value.
+**How keyframes behave:** once a property has a keyframe, any change to it (typing or dragging in the preview) writes
+a keyframe at the playhead. Properties without keyframes just change their value.
 
 ### Keyboard shortcuts
 
@@ -58,109 +76,122 @@ Projects are saved in `./workspace/` by default. Set `MOTION_WORKSPACE=<folder>`
 | Space | Play / pause |
 | ← / → (Shift = 10 frames) | Step one frame |
 | Home | Jump to start |
-| Ctrl+Z / Ctrl+Shift+Z (or Ctrl+Y) | Undo / redo. Each edit is one step, and one whole drag is one step |
+| Ctrl+Z / Ctrl+Shift+Z (or Ctrl+Y) | Undo / redo — each edit is one step, a whole drag is one step |
+| Delete / Backspace | Delete the selected keyframes, else the selected sound clips, else the selected layers |
+| Ctrl+C / Ctrl+V | Copy / paste keyframes (positions are pasted *relative* to each selected layer) or layers |
+| Ctrl+Shift+V | Paste keyframes with their exact values |
+| Ctrl+D | Duplicate the selected layers or sound clips |
 | Ctrl+S / Ctrl+Shift+S | Save / Save as |
-| Ctrl+D | Duplicate the selected layers |
-| Delete | Delete the selected layers |
-| Esc | Clear the selection |
+| Esc | Clear the keyframe selection, then the clip/layer selection |
 
 ---
 
 ## Save / Open
 
-- **Save** writes a folder `workspace/<name>.motion/` that contains `project.json` (schema-validated with zod) and `assets/`.
-- **Imported files are copied byte-for-byte**, named `<sha256 prefix>-<original name>`, and never re-encoded.
-- **Unsaved changes** show a ● next to the project name and in the browser tab title. The browser warns you if you close the tab with unsaved changes.
-- **Missing files** (deleted or moved assets) show as a grey crossed placeholder in the preview, plus a **Relink…** button. Relinking keeps every layer that uses the file.
-- **Export .zip / Import .zip** packs or unpacks the whole project (`project.json` plus assets) as a single file.
+- **Save** writes a folder `workspace/<name>.motion/` with `project.json` (validated with zod) and `assets/`.
+  Projects made with v1 open automatically (they are upgraded on load).
+- **Imported files are copied byte-for-byte** (named `<sha256 prefix>-<original name>`), never re-encoded.
+- **Unsaved changes** show a ● next to the project name and in the tab title; closing the tab warns you.
+- **Missing files** (moved or deleted images, fonts, sounds) show a placeholder and a **Relink…** button that keeps
+  every layer and clip that uses them.
+- **File ▾ → Export .zip / Import .zip** packs or unpacks a whole project (also zips made with Windows' Compress-Archive).
 
 ---
 
 ## Export
 
-**From the app:** click **Export MP4**, then **Start export**. A progress bar and a **Cancel** button appear while it runs. When it finishes, the file is saved to `workspace/exports/` and offered as a download.
+**From the app:** click **Export MP4**, pick *Size* (100 % / 50 % / 25 %, with the real pixel size shown), *Quality*
+(Best / Good / Draft) and *Include audio*, then **Start export**. A progress bar and **Cancel** appear; the file goes to
+`workspace/exports/<name>-<W>x<H>-<date-time>.mp4` and is offered as a download. Your choices are remembered.
 
-**From a terminal** (the same pipeline, with no editor UI):
+**From a terminal** (same pipeline, no editor UI):
 
 ```bash
 npm run render -- "workspace/My project.motion" out.mp4
+npm run render -- "workspace/My project.motion" draft.mp4 --scale 0.5 --crf 26 --preset veryfast --no-audio
 ```
 
-### How export works
+**How it works:** the server opens headless Chromium on a render-only page that waits for fonts and images, then draws
+every frame with the same `renderFrame()` the editor uses and streams the pixels into ffmpeg
+(`libx264`, `yuv420p`, BT.709, `+faststart`; CRF 16 / 20 / 26). Sound is mixed by ffmpeg with exactly the same timing,
+trims and fades as the preview, and is exactly as long as the video. If ffmpeg is missing, the dialog and the CLI show
+how to install it.
 
-- The server launches headless Chromium (Playwright) on a render-only page (`render.html`). That page waits for `document.fonts.ready` and for every image to decode before frame 0.
-- It then calls the same `renderFrame()` the editor uses for every frame, at the full project resolution.
-- Raw RGBA frames stream into `ffmpeg -c:v libx264 -crf 16 -pix_fmt yuv420p -movflags +faststart`, tagged BT.709, with accurate-rounding colour conversion.
-- **If ffmpeg is missing**, the export dialog (and the CLI) shows the install command for your OS and the exact CLI command to render your saved project afterwards.
-
-**Measured speed** (4-core Linux container): a 3 s 1080p clip renders in about 6 s, and a 15 s 4K clip (450 frames) in about 64 s.
-
----
-
-## Architecture
-
-```
-src/shared/schema.ts        zod schema = single source of truth for project.json
-src/shared/renderFrame.ts   renderFrame(project, timeSec, ctx, scale, resources) — pure Canvas 2D drawing
-src/shared/easing.ts        linear / ease-in / ease-out / ease-in-out / cubic-bezier / spring (closed form)
-src/shared/interpolate.ts   keyframe sampling, colour interpolation
-src/shared/presets.ts       animation presets → ordinary keyframes; stagger (seeded PRNG)
-src/app/                    React editor (Zustand store with immer; undo/redo via snapshots + gestures)
-src/render/main.ts          render-only page used by export (and tests)
-server/                     Express: projects, assets, zip, export jobs; Vite dev middleware on the same port
-```
-
-- **Deterministic rendering:** output depends only on `(project, time)`. There is no `Date.now()`, no unseeded `Math.random()`, no CSS animation and no state that builds up across frames, so any timestamp can be rendered directly. Springs are evaluated in closed form, and "random" stagger uses a seeded PRNG.
-- **Crisp at 4K:** the preview canvas is sized in device pixels (devicePixelRatio-aware). Export draws vectors at the full target resolution, and a bitmap of the canvas is never upscaled. Imported bitmaps are placed at no more than their natural size by default.
-
-### Deviations from the original brief's stack (and why)
-
-- **One process instead of two:** Express mounts Vite in middleware mode, so the API, the editor and the export page share one origin and port. That means no CORS setup and nothing extra to start. `npm run dev` is still the only command.
-- **Immer** for immutable edits: it makes snapshot-based undo cheap and keeps each edit to a few lines.
-- **Inter** (via `@fontsource/inter`) is bundled so the preview and export use the same font offline.
+**Measured speed** (4-core Linux container): a 3 s 1080p clip exports in about 6 s; a 15 s 4K clip (450 frames) in
+about 64 s. Blur and transitions cost extra while they are on screen (see `docs/lane-a.md`).
 
 ---
 
 ## Works (tested)
 
-Everything in this section has a passing automated test. Run `npm test` for 39 unit tests plus 15 Playwright end-to-end tests. They also passed 3 full repeats in a row (45/45).
+Everything below is covered by automated tests that pass. Run `npm test`:
+**323 unit tests** (vitest) and **82 end-to-end tests** (Playwright, real Chromium + ffmpeg), all passing twice in a row
+on the merged v2 branch.
 
-**Unit (`tests/unit`)**
-- Interpolation: hold before the first and after the last keyframe, linear interpolation, per-segment easing, unsorted keys, colour and alpha interpolation, falling back to the fixed value.
-- Every easing type ends exactly at 0 and 1 and is deterministic. Ease-in/out shapes, CSS cubic-bezier reference values and overshoot are checked. Springs: underdamped, critical and overdamped, plus independence from segment length.
-- Determinism: `renderFrame` gives identical draw calls when rendered twice, and the order frames are rendered in doesn't matter. Hidden and out-of-range layers are skipped, and the cursor reaches each target point.
-- Presets: fade, slide and scale generate keyframes, and re-applying replaces the previous preset while keeping manual keyframes. Stagger forward, reverse and seeded-random orders are repeatable.
+The exact test names and measured numbers for every v2 feature are in [`docs/lane-a.md`](docs/lane-a.md) (rendering:
+effects, transitions, text animation, shapes) and [`docs/lane-b.md`](docs/lane-b.md) (sound, timeline/preview, export,
+Windows, CI).
 
-**End-to-end (`tests/e2e`)**
-- **The brief's full flow:** new project → import fixture image → place it by dragging → keyframes on x and opacity → move the second keyframe in time → scrub to the midpoint and screenshot → undo (the value reverts) → redo → save → reload the app → open the project. The test then deep-compares `project.json` (scenes, layers, keyframes, settings, asset refs), confirms the asset is byte-identical and loads, and checks that one drag counts as one history step.
-- **The brief's export test:** a 3 s 1080p project goes to MP4, and ffmpeg extracts the first, middle and last frames. Each is compared with `renderFrame` output at the same timestamp: mean absolute difference about 0.78 out of 255, PSNR about 38.8 dB (thresholds: 1.5 and 36 dB). The MP4 is H.264, yuv420p, 90 frames at 30 fps, with faststart.
-- **Pixel determinism** in real Chromium: the same `t` twice gives an identical SHA-256.
-- **CLI render** works, and a missing ffmpeg gives a clear error with install steps. **Export can be cancelled.**
-- **Export MP4 dialog:** the progress bar reaches 30/30 and the download works.
-- **Zip export and import** round-trip.
-- **Missing asset:** placeholder plus **Relink…** restores it.
-- **Settings:** changing aspect, duration or fps never deletes layers, and each change is one undo step.
-- **Presets UI:** the slide preset generates keyframes and re-applying doesn't duplicate them. **Stagger UI** applies 0.5 s offsets.
-- **Preview handles:** scale, rotate with Shift snapping to 15°, Shift-constrained move. Each drag is one undo step. Selection stays synced across the preview, the layers list and the timeline, and clicking empty space deselects.
-- **Scenes:** create, rename, duplicate, reorder, delete. **Layers:** reorder, hide, lock, rename, duplicate, delete, undo.
-- **Timeline:** drag a scene edge, move and trim layer bars, zoom.
-- **Playback:** Space plays and pauses, arrow keys step frames, playback stops at the end, loop wraps, and the timecode and frame counter update.
-- **Imports:** SVG and font import. The font appears in the Font menu, and spring easing set through the easing picker is stored on the keyframe.
-- **Cursor layer:** drag a path point in the preview, add a click at the playhead, change smoothing.
+**Core editor (v1, still covered):** the brief's full flow — new project → import image → place it → keyframes on x and
+opacity → move a keyframe in time → scrub → undo / redo → save → reload → open → `project.json` deep-compared and the
+asset byte-identical; MP4 export compared frame-by-frame with `renderFrame` (first / middle / last frame, mean
+difference < 1.5 / 255, PSNR > 36 dB); CLI render; cancel; zip round trip; missing-file relink; handles, panels,
+timeline, playback, SVG/font import, cursor paths; v1 projects open in v2.
+
+**v2:**
+- **Effects & transitions** — blur, drop shadow and blend modes (an outline never shadows its own fill; the cursor's
+  shadow is visible from frame 1); scene backgrounds; every transition style exported and compared with `renderFrame`
+  inside the transition (PSNR ≥ 40 dB); cross-fades have no mid-point dip; the "previous scene" rule; a 4K performance
+  guard (< 400 ms per heavy frame).
+- **Text animation** — every style and setting, in and out timing, kerning identical to whole-line text, the caret,
+  export compared mid-animation (PSNR ≥ 42.7 dB).
+- **Shapes** — every shape kind, outline lengths checked against numeric integration, trim paths incl. wrap-around and
+  pills, gradients, text outlines (also while fading), *Draw on*, export compared (PSNR ≥ 40.8 dB).
+- **Sound** — import (incl. formats the browser can't decode), clip defaults, waveform rows, move/trim/volume/fades,
+  click sounds, preview engine, missing-file relink; real exports measured: sound starts at 0, is exactly as long as
+  the video, and is placed, trimmed and faded where it should be.
+- **Timeline & preview** — keyframe selection, rows, delete, relative copy/paste, keyboard precedence, snapping (exact
+  centre/edges; Ctrl disables), guides incl. the 9:16 safe zone, marquee, menus closing on outside click/Esc,
+  resizable timeline, "+ Scene" splitting the timeline.
+- **Export & formats** — 100/50/25 % sizes incl. odd sizes, quality levels, include-audio, unique file names, CLI flags,
+  PNG still identical to the video frame, *Make a copy in another format*, Windows-safe names, Notepad/PowerShell files.
 
 ## Not implemented
 
-- Video clips as layers, AI generation, and cloud sync. These are listed as **"Not available"** under the toolbar's "More ▾" menu. (Audio, scene transitions and effects are being built in v2.)
-- Marquee (box) selection, snapping and guides, and per-property keyframe rows in the timeline. Diamonds are grouped per layer, and dragging one moves every property's keyframe at that time.
-- Animating the anchor point (it is a fixed value). Triangle, star, polygon and line can be added but currently draw as rectangles until the v2 shape work lands.
+- Video clips as layers, AI generation, cloud sync (listed as "Not available" under "More ▾").
+- Arrow-key navigation in toolbar menus; copy/paste between browser tabs (the clipboard is per tab).
 
 ## Known limitations
 
-- **Developed and tested on Linux** (Node 22, Chromium 141 via Playwright 1.56.1). The code avoids OS-specific paths and commands, but **it has not yet been run on Windows 11**. Please report anything that breaks there.
-- **Preview vs export:** the preview draws in *your* browser, while export uses headless Chromium. In Chrome or Edge they match. In Firefox or Safari, text anti-aliasing may differ slightly.
-- **Export speed:** rendering is CPU-only, so expect roughly 1 minute per 15 s of 4K on a 4-core machine.
+- **Windows**: built and tested on Linux. The CI workflow (`.github/workflows/ci.yml`) runs the whole suite on
+  `windows-latest` too — check its result on the pull request; until it is green, treat Windows as untested.
+- **Preview vs export**: the preview draws in *your* browser, export in headless Chromium. In Chrome/Edge they match.
+- **Export speed**: CPU-only rendering, roughly 1 minute per 15 s of 4K on 4 cores; blur transitions cost ~0.5 s per
+  4K frame while they run.
+- **Sound**: preview needs a click or key press first (browser rule — pressing Play is enough). Sources with more than
+  two channels may sound slightly different in preview vs export. Formats the browser can't play still export.
+- **Letter-by-letter animation** can't use ligatures while the letters move (the final text is exact).
+- **Format copy** scales and centres; it doesn't re-arrange layouts for the new shape.
 - **Undo history** lives in memory only and resets when you open a project.
-- **Test hook:** the editor exposes its state store on `window.__motion` (read by the end-to-end tests).
+- **Test hook:** the editor exposes its store on `window.__motion` (used by the Playwright tests).
+
+---
+
+## Architecture (short)
+
+```
+src/shared/schema.ts        zod schema (v2) = single source of truth for project.json; v1 files migrate on load
+src/shared/renderFrame.ts   renderFrame(project, t, ctx, scale, resources) — pure Canvas 2D drawing
+src/shared/…                easing, interpolation, presets, transitions (+ transitionDraw), effects, inkBounds,
+                            textAnim, shapes, geometry, audioPlan, exportSize, fitToFrame, canvas (pool), names
+src/app/                    React editor (Zustand + immer; undo/redo via snapshots + gestures), audio engine,
+                            snapping, clipboard, timeline, preview, properties sections
+src/render/main.ts          render-only page used by export (and tests)
+server/                     Express: projects, assets, zip, export jobs, audio mix; Vite middleware on the same port
+```
+
+Rendering is deterministic (no clocks, no unseeded randomness, no state between frames), text and shapes are drawn as
+vectors at the target size, and the preview, the PNG still and the MP4 come from the same function.
 
 ---
 
@@ -169,5 +200,7 @@ Everything in this section has a passing automated test. Run `npm test` for 39 u
 ```bash
 npm run typecheck
 npm run test:unit      # vitest
-npm run test:e2e       # Playwright (starts its own server on port 5199, workspace .e2e-workspace/)
+npm run test:e2e       # Playwright (own server on E2E_PORT, default 5199; workspace .e2e-workspace/)
 ```
+
+See `CLAUDE.md` for project rules and testing gotchas, and `docs/v2-plan.md` for the v2 design spec.

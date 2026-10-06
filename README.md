@@ -138,16 +138,17 @@ asset byte-identical; MP4 export compared frame-by-frame with `renderFrame` (fir
 difference < 1.5 / 255, PSNR > 36 dB); CLI render; cancel; zip round trip; missing-file relink; handles, panels,
 timeline, playback, SVG/font import, cursor paths; v1 projects open in v2.
 
-**v2:**
+**v2** (every export comparison asserts a mean difference < 1.5 / 255 and PSNR > 36 dB against `renderFrame`; measured
+38–50 dB):
 - **Effects & transitions** — blur, drop shadow and blend modes (an outline never shadows its own fill; the cursor's
-  shadow is visible from frame 1); scene backgrounds; every transition style exported and compared with `renderFrame`
-  inside the transition (PSNR ≥ 40 dB); cross-fades have no mid-point dip; the "previous scene" rule; a 4K performance
-  guard (< 400 ms per heavy frame).
+  shadow is visible from frame 1); scene backgrounds; every transition style (fade, slide, push, wipe, zoom, blur)
+  exported and compared with `renderFrame` inside the transition; cross-fades have no mid-point dip; the "previous
+  scene" rule; a 4K performance guard (< 400 ms per heavy frame).
 - **Text animation** — every style and setting, in and out timing, kerning identical to whole-line text (also for
-  right-to-left lines), the caret, export compared mid-animation (PSNR ≥ 42.7 dB); text in other scripts (Polish,
+  right-to-left lines), the caret, export compared mid-animation; text in other scripts (Polish,
   Cyrillic, Vietnamese…) is in Inter from the first frame; imported fonts with any file name.
 - **Shapes** — every shape kind, outline lengths checked against numeric integration, trim paths incl. wrap-around and
-  pills, gradients, text outlines (also while fading), *Draw on*, export compared (PSNR ≥ 40.8 dB).
+  pills, gradients, text outlines (also while fading), *Draw on*, export compared.
 - **Sound** — import (incl. formats the browser can't decode), clip defaults, waveform rows, move/trim/volume/fades,
   click sounds, preview engine, missing-file relink; real exports measured: sound starts at 0, is exactly as long as
   the video, and is placed, trimmed and faded where it should be.

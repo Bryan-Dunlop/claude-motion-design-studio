@@ -65,6 +65,10 @@ test('export matches renderFrame inside a slide window', async ({ page, request 
   await exportAndCompare(page, request, transitionProject('slide', 'up'), 'slide');
 });
 
+test('export matches renderFrame inside a push window', async ({ page, request }) => {
+  await exportAndCompare(page, request, transitionProject('push', 'right'), 'push');
+});
+
 test('export matches renderFrame inside a wipe window', async ({ page, request }) => {
   await exportAndCompare(page, request, transitionProject('wipe', 'right'), 'wipe');
 });

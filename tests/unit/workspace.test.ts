@@ -138,3 +138,22 @@ describe('isLocalRequest (the API answers only the editor on this computer)', ()
     expect(isLocalRequest('127.0.0.1:5173', 'null')).toBe(false);
   });
 });
+
+describe('Workspace.zip', () => {
+  it('packs project.json and every asset file it can find, byte for byte (from the project folder or the store)', () => {
+    const { ws, root } = workspace();
+    const inStore = crypto.randomBytes(300);
+    const inFolder = crypto.randomBytes(200);
+    const a = { id: 'a', originalName: 'a.png', relativePath: `assets/${sha(inStore).slice(0, 8)}-a.png`, type: 'image' as const, hash: sha(inStore), width: 1, height: 1 };
+    const b = { id: 'b', originalName: 'b.png', relativePath: `assets/${sha(inFolder).slice(0, 8)}-b.png`, type: 'image' as const, hash: sha(inFolder), width: 1, height: 1 };
+    ws.storeScratch(inStore, 'a.png');
+    const p = project('#123456', [a, b]);
+    fs.mkdirSync(path.join(root, 'Z.motion', 'assets'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'Z.motion', b.relativePath), inFolder);
+    const zip = new AdmZip(ws.zip(p, path.join(root, 'Z.motion')));
+    expect(zip.getEntries().map((e) => e.entryName).sort()).toEqual([a.relativePath, b.relativePath, 'project.json'].sort());
+    expect(zip.getEntry(a.relativePath)!.getData().equals(inStore)).toBe(true);
+    expect(zip.getEntry(b.relativePath)!.getData().equals(inFolder)).toBe(true);
+    expect(JSON.parse(zip.getEntry('project.json')!.getData().toString('utf8')).settings.background).toBe('#123456');
+  });
+});

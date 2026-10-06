@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { propLabel } from '../../shared/propLabels';
 import { ANIMATABLE, type Layer, type Scene } from '../../shared/schema';
 import { startDrag } from '../drag';
@@ -225,11 +225,18 @@ export function Timeline() {
       return next;
     });
 
-  const onWheel = (e: React.WheelEvent) => {
-    if (!e.ctrlKey && !e.metaKey) return;
-    e.preventDefault();
-    st().setZoom(zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15));
-  };
+  // Ctrl/⌘ + wheel zooms the timeline. A native listener: React's onWheel is passive, so it could not stop the browser
+  // from zooming the whole page at the same time.
+  useEffect(() => {
+    const el = rootRef.current!;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      st().setZoom(st().zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15));
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
 
   // Ruler ticks: choose a step that leaves >= 60px between labels.
   const steps = [0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60];
@@ -240,7 +247,7 @@ export function Timeline() {
   const layers = scene ? [...scene.layers].reverse() : [];
 
   return (
-    <div className="timeline" ref={rootRef} onWheel={onWheel}>
+    <div className="timeline" ref={rootRef}>
       <div className="tl-splitter" onPointerDown={startResize} title="Drag to make the timeline taller or shorter" data-testid="timeline-splitter" />
       <div className="timeline-scroll" ref={scrollRef}>
         <div className="tl-inner" style={{ width: LABEL_W + trackW + 40 }}>

@@ -192,6 +192,15 @@ export async function startServer(opts: { port: number; workspace: string; host?
     finishFrames(jobOr404(req));
     res.json({ ok: true });
   }));
+  /** The render page's images and fonts that could not be loaded: the export goes on, with a warning per file. */
+  app.post('/api/jobs/:id/missing', json, wrap((req, res) => {
+    const job = jobOr404(req);
+    const ids: unknown[] = Array.isArray(req.body?.assetIds) ? req.body.assetIds : [];
+    for (const a of job.project.assets.filter((a) => ids.includes(a.id))) {
+      job.warnings.push(a.type === 'font' ? `Font file missing: ${a.originalName} — exported in a fallback font.` : `Image missing: ${a.originalName} — exported with a placeholder.`);
+    }
+    res.json({ ok: true });
+  }));
   app.post('/api/jobs/:id/fail', json, wrap((req, res) => {
     fail(jobOr404(req), String(req.body?.message ?? 'Render page failed'));
     res.json({ ok: true });

@@ -252,6 +252,22 @@ test('missing WAV: Relink appears in Assets, the export warns about it, relinkin
   expect((await getState(page)).project.assets[0]).toMatchObject({ type: 'audio' });
 });
 
+test('the preview really sets the clip volume, the mono −3 dB and the fades on its GainNodes', async ({ page }) => {
+  await page.goto('/');
+  await page.getByTestId('file-input').setInputFiles(tone('fades.wav', 2));
+  await expect(page.getByTestId('audio-row-0')).toBeVisible();
+  await expect.poll(async () => Object.values((await engine(page)).entries).map((e: any) => e.status)).toEqual(['ready']);
+  await store(page, 's.commit((d) => { d.audio[0].volume = 0.5; d.audio[0].fadeIn = 0.5; d.audio[0].fadeOut = 0.4; })');
+  await page.getByTestId('btn-play').click();
+  await expect.poll(async () => (await engine(page)).scheduled.length).toBe(1);
+  const { automation, when } = (await engine(page)).scheduled[0];
+  const r = (a: [string, number, number][]) => a.map(([op, v, t]) => [op, Math.round(v * 1e6) / 1e6, Math.round((t - when) * 1e6) / 1e6]);
+  const v = Math.round(0.5 * Math.SQRT1_2 * 1e6) / 1e6;
+  // Fade in 0 → 1 over 0.5 s; volume 0.5 × −3 dB (mono), held until the 0.4 s fade-out ramps it to 0 at the clip end.
+  expect(r(automation.in)).toEqual([['set', 0, 0], ['ramp', 1, 0.5]]);
+  expect(r(automation.out)).toEqual([['set', v, 0], ['set', v, 1.6], ['ramp', 0, 2]]);
+});
+
 test('Sound toggle is a remembered preference; the preview engine follows play, pause, seek, loop and audio edits', async ({ page }) => {
   await page.goto('/');
   await page.getByTestId('file-input').setInputFiles(tone('bed.wav', 2));

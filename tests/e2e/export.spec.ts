@@ -50,19 +50,32 @@ test('MP4 export matches renderFrame at first, middle and last frame', async ({ 
   await expectExportMatchesRender(page, { project, projectName: name, mp4, frames: [0, 45, 89], wrongFrame: (f) => (f === 0 ? 89 : 0) });
 });
 
-test('CLI render produces the same video, and reports missing ffmpeg clearly', async ({ request }) => {
+test('CLI render produces the same video, and reports missing ffmpeg clearly', async ({ page, request }) => {
   const project = await buildProject(request);
   const name = `CLI ${Date.now()}`;
   await saveProject(request, name, project);
   const out = test.info().outputPath('cli.mp4');
-  const r = await runRenderCli([path.join(WS, `${name}.motion`), out]);
+  // A fresh workspace: the image must come from the project folder itself, not the editor's store.
+  const r = await runRenderCli([path.join(WS, `${name}.motion`), out], { ...process.env, MOTION_WORKSPACE: test.info().outputPath('cli-ws') });
   expect(r.status, r.stderr + r.stdout).toBe(0);
+  expect(r.stderr).not.toContain('Warning');
   expect(probe(out)).toMatchObject({ codec_name: 'h264', width: 1920, height: 1080, nb_read_frames: '90' });
+  await expectExportMatchesRender(page, { project, projectName: name, mp4: out, frames: [0, 45, 89], wrongFrame: (f) => (f === 0 ? 89 : 0) });
 
   const missing = await runRenderCli([path.join(WS, `${name}.motion`), out], { ...process.env, FFMPEG_PATH: '/definitely/not/ffmpeg' });
   expect(missing.status).toBe(1);
   expect(missing.stderr).toContain('ffmpeg was not found');
   expect(missing.stderr).toContain('winget install');
+});
+
+test('a missing image is exported as a placeholder, with a warning from the CLI', async ({ request }) => {
+  const project = await buildProject(request);
+  const name = `CLI missing ${Date.now()}`;
+  const dir = await saveProject(request, name, project);
+  fs.rmSync(path.join(dir, project.assets[0].relativePath));
+  const r = await runRenderCli([dir, test.info().outputPath('missing.mp4')], { ...process.env, MOTION_WORKSPACE: test.info().outputPath('cli-ws') });
+  expect(r.status, r.stderr + r.stdout).toBe(0);
+  expect(r.stderr).toContain('Warning: Image missing: fixture.png — exported with a placeholder.');
 });
 
 test('export can be cancelled', async ({ request }) => {

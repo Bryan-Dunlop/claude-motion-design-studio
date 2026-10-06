@@ -2,6 +2,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
+import AdmZip from 'adm-zip';
+import { WS } from './exportCompare';
 import { comparable, getState } from './helpers';
 
 const FIXTURE = path.resolve('tests/fixtures/fixture.png');
@@ -39,6 +41,11 @@ test('project .zip export and import round-trips', async ({ page }) => {
   await expect(page.getByTestId('file-menu-list')).toHaveCount(0); // picking an item closes the menu
   const zip = test.info().outputPath(`Zip ${Date.now()}.motion.zip`);
   await download.saveAs(zip);
+  // The zip holds project.json and the image itself, byte for byte.
+  const image = before.assets.find((a) => a.type === 'image')!;
+  const entries = new AdmZip(zip).getEntries().map((e) => e.entryName);
+  expect(entries).toContain('project.json');
+  expect(new AdmZip(zip).getEntry(image.relativePath)?.getData().equals(fs.readFileSync(FIXTURE))).toBe(true);
 
   page.on('dialog', (d) => d.accept()); // "discard unsaved changes?"
   await page.getByRole('button', { name: 'New' }).click();
@@ -52,4 +59,6 @@ test('project .zip export and import round-trips', async ({ page }) => {
   const after = await getState(page);
   expect(comparable(after.project)).toEqual(comparable(before));
   await expect.poll(async () => (await getState(page)).missing).toEqual([]);
+  // …and the imported project folder has its own copy of the image (not just the shared store's).
+  expect(fs.readFileSync(path.join(WS, `${after.name}.motion`, image.relativePath)).equals(fs.readFileSync(FIXTURE))).toBe(true);
 });

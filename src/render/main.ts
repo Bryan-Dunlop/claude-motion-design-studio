@@ -29,6 +29,9 @@ async function runJob(id: string) {
     const job = (await (await fetch(`/api/jobs/${id}/project`)).json()) as { project: Project; outW: number; outH: number; scale: number };
     const { project, outW, outH, scale } = job;
     const res = { ...(await loadResources(project, (assetId) => `/api/jobs/${id}/asset/${assetId}`)), canvasPool };
+    if (res.missing.size) {
+      await fetch(`/api/jobs/${id}/missing`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ assetIds: [...res.missing] }) });
+    }
     const { canvas, ctx } = makeCanvas(outW, outH);
     canvas.style.display = 'none';
     const total = frameCount(project);

@@ -63,8 +63,11 @@ try {
     console.log('\nCancelling…');
     cancel(getJob(id)!);
   });
+  const shown = job.warnings.length;
   try {
     await job.finished;
+    // Problems found while rendering (an image or font that could not be loaded).
+    for (const w of job.warnings.slice(shown)) console.warn(`\nWarning: ${w}`);
     console.log(`\nDone: ${outFile}`);
   } finally {
     clearInterval(timer);

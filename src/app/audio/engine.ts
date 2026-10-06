@@ -5,7 +5,7 @@
 // asset uses it any more. Clips whose file isn't decoded yet are skipped ("preparing audio…") and join in when ready.
 import { useEffect } from 'react';
 import { create } from 'zustand';
-import { audioPlanKey, clipGain, planAudio, type PlannedClip } from '../../shared/audioPlan';
+import { audioPlanKey, planAudio, type PlannedClip } from '../../shared/audioPlan';
 import { assetUrl } from '../../shared/assetUrl';
 import type { Asset, Project } from '../../shared/schema';
 import { usePrefs } from '../prefs';
@@ -27,6 +27,9 @@ const warned = new Set<string>();
 let ctx: AudioContext | null = null;
 let master: GainNode | null = null;
 
+/** Gain automation as it was issued to an AudioParam: [setValueAtTime | linearRampToValueAtTime, value, time]. */
+type Automation = ['set' | 'ramp', number, number][];
+
 interface Scheduled {
   clipId: string;
   hash: string;
@@ -35,6 +38,8 @@ interface Scheduled {
   offset: number;
   duration: number;
   gain: number;
+  /** What the fade-in and volume·fade-out GainNodes were really told (for tests: window.__motion.audio()). */
+  automation: { in: Automation; out: Automation };
   node: AudioBufferSourceNode;
 }
 
@@ -80,21 +85,28 @@ function stopSources() {
   session.scheduled = [];
 }
 
-/** Gain envelope on two GainNodes (fade in × volume·fade out), like the export's afade filters, from clip time `elapsed`. */
+/**
+ * Gain envelope on two GainNodes (fade in × volume·fade out), like the export's afade filters, from clip time
+ * `elapsed`. Returns the automation exactly as issued.
+ */
 function envelope(gIn: AudioParam, gOut: AudioParam, c: PlannedClip, when: number, volume: number) {
+  const log = { in: [] as Automation, out: [] as Automation };
+  const set = (p: AudioParam, l: Automation, v: number, t: number) => (p.setValueAtTime(v, t), l.push(['set', v, t]));
+  const ramp = (p: AudioParam, l: Automation, v: number, t: number) => (p.linearRampToValueAtTime(v, t), l.push(['ramp', v, t]));
   const u0 = c.elapsed;
   if (c.fadeIn > 0 && u0 < c.fadeIn) {
-    gIn.setValueAtTime(u0 / c.fadeIn, when);
-    gIn.linearRampToValueAtTime(1, when + (c.fadeIn - u0));
-  } else gIn.setValueAtTime(1, when);
+    set(gIn, log.in, u0 / c.fadeIn, when);
+    ramp(gIn, log.in, 1, when + (c.fadeIn - u0));
+  } else set(gIn, log.in, 1, when);
   const os = Math.max(0, c.duration - c.fadeOut);
   if (c.fadeOut > 0) {
     if (u0 < os) {
-      gOut.setValueAtTime(volume, when);
-      gOut.setValueAtTime(volume, when + (os - u0));
-    } else gOut.setValueAtTime((volume * (c.duration - u0)) / c.fadeOut, when);
-    gOut.linearRampToValueAtTime(0, when + (c.duration - u0));
-  } else gOut.setValueAtTime(volume, when);
+      set(gOut, log.out, volume, when);
+      set(gOut, log.out, volume, when + (os - u0));
+    } else set(gOut, log.out, (volume * (c.duration - u0)) / c.fadeOut, when);
+    ramp(gOut, log.out, 0, when + (c.duration - u0));
+  } else set(gOut, log.out, volume, when);
+  return log;
 }
 
 /** Schedule planned clips; `base` is the AudioContext time of the plan's start time (delay 0). */
@@ -122,10 +134,11 @@ function schedule(clips: PlannedClip[], project: Project, base: number) {
     const gOut = ctx.createGain();
     // ffmpeg up-mixes mono to stereo at −3 dB per channel; Web Audio copies it at full level. Match the export.
     const volume = c.volume * (buf.numberOfChannels === 1 ? Math.SQRT1_2 : 1);
-    envelope(gIn.gain, gOut.gain, c, when, volume);
+    const automation = envelope(gIn.gain, gOut.gain, c, when, volume);
     node.connect(gIn).connect(gOut).connect(master);
     node.start(when, c.offset, duration);
-    session.scheduled.push({ clipId: c.id, hash: asset.hash, when, offset: c.offset, duration, gain: clipGain({ ...c, volume }, c.elapsed), node });
+    const gain = automation.in[0][1] * automation.out[0][1];
+    session.scheduled.push({ clipId: c.id, hash: asset.hash, when, offset: c.offset, duration, gain, automation, node });
   }
 }
 
@@ -243,7 +256,11 @@ export function audioDebug() {
     idle: session?.idle ?? null,
     from: session?.from ?? null,
     generation: session?.generation ?? generation,
-    scheduled: (session?.scheduled ?? []).map(({ node: _n, ...s }) => ({ ...s, when: s.when - (session?.t0 ?? 0) })),
+    scheduled: (session?.scheduled ?? []).map(({ node: _n, ...s }) => {
+      const t0 = session?.t0 ?? 0;
+      const rel = (a: Automation) => a.map(([op, v, t]) => [op, v, t - t0]);
+      return { ...s, when: s.when - t0, automation: { in: rel(s.automation.in), out: rel(s.automation.out) } };
+    }),
     entries: Object.fromEntries([...entries].map(([h, e]) => [h, e.status === 'ready' ? { status: e.status, channels: e.buffer.numberOfChannels, duration: e.buffer.duration } : { status: e.status }])),
   };
 }

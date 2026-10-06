@@ -1,9 +1,11 @@
-// MP4 export: headless Chromium renders frames with the same renderFrame used by the editor,
-// posts raw RGBA bytes back here, and we pipe them straight into ffmpeg (libx264, yuv420p, CRF 16).
+// MP4 export: headless Chromium renders frames with the same renderFrame used by the editor, at the output size
+// (exportSize), posts raw RGBA bytes back here, and we pipe them straight into ffmpeg (libx264, yuv420p; CRF/preset
+// from the export options, CRF 16 by default).
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import type { Browser } from 'playwright';
+import { ExportOptionsSchema, exportSize, type ExportOptions, type ExportOptionsInput } from '../src/shared/exportSize';
 import { frameCount } from '../src/shared/renderFrame';
 import type { Asset, Project } from '../src/shared/schema';
 import { buildAudioArgs, type AudioArgs } from './audioMix';
@@ -16,6 +18,9 @@ export interface ExportJob {
   project: Project;
   projectDir: string | null;
   outFile: string;
+  options: ExportOptions;
+  /** Output frame size (even numbers) and the renderFrame scale that fills it (exportSize). */
+  size: { outW: number; outH: number; scale: number };
   status: JobStatus;
   frame: number;
   total: number;
@@ -52,16 +57,20 @@ export const getJob = (id: string) => jobs.get(id);
 
 const NO_AUDIO: AudioArgs = { inputs: [], filter: [], codec: [], warnings: [] };
 
-/** Full ffmpeg command: raw RGBA frames on stdin (input 0), plus the audio inputs and mix from buildAudioArgs. */
-export function ffmpegArgs(project: Project, outFile: string, audio: AudioArgs = NO_AUDIO): string[] {
-  const { width, height, fps } = project.settings;
+/**
+ * Full ffmpeg command: raw RGBA frames at the output size on stdin (input 0), plus the audio inputs and mix from
+ * buildAudioArgs. `options` (export options, all optional) set the size, CRF and preset.
+ */
+export function ffmpegArgs(project: Project, outFile: string, audio: AudioArgs = NO_AUDIO, options: ExportOptionsInput = {}): string[] {
+  const o = ExportOptionsSchema.parse(options);
+  const { outW, outH } = exportSize(project.settings, o.scale);
   return [
     '-y', '-loglevel', 'error',
-    '-f', 'rawvideo', '-pix_fmt', 'rgba', '-s', `${width}x${height}`, '-r', String(fps), '-i', '-',
+    '-f', 'rawvideo', '-pix_fmt', 'rgba', '-s', `${outW}x${outH}`, '-r', String(project.settings.fps), '-i', '-',
     ...audio.inputs,
     ...audio.filter,
     '-vf', 'scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int+full_chroma_inp,format=yuv420p',
-    '-c:v', 'libx264', '-preset', 'medium', '-crf', '16', '-pix_fmt', 'yuv420p',
+    '-c:v', 'libx264', '-preset', o.preset, '-crf', String(o.crf), '-pix_fmt', 'yuv420p',
     '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709',
     ...audio.codec,
     '-movflags', '+faststart',
@@ -91,8 +100,11 @@ export async function startExport(opts: {
   baseUrl: string;
   /** Where an asset's bytes are on disk (project folder, then the scratch store); null when missing. */
   resolveAsset?: (asset: Asset) => string | null;
+  /** Size, quality and audio (all optional; defaults = 100%, CRF 16 medium, with audio). */
+  options?: ExportOptionsInput;
 }): Promise<ExportJob> {
   if (!ffmpegAvailable()) throw Object.assign(new Error(FFMPEG_HELP), { status: 424 });
+  const options = ExportOptionsSchema.parse(opts.options ?? {});
   let resolve!: () => void;
   let reject!: (e: Error) => void;
   const finished = new Promise<void>((res, rej) => {
@@ -105,6 +117,8 @@ export async function startExport(opts: {
     project: opts.project,
     projectDir: opts.projectDir,
     outFile: opts.outFile,
+    options,
+    size: exportSize(opts.project.settings, options.scale),
     status: 'starting',
     frame: 0,
     total: frameCount(opts.project),
@@ -115,9 +129,10 @@ export async function startExport(opts: {
   };
   jobs.set(job.id, job);
 
-  const audio = buildAudioArgs(opts.project, opts.resolveAsset ?? ((a) => fileInProject(opts.projectDir, a)));
+  // "Include audio" off: no audio inputs at all (and no warnings about missing sound files).
+  const audio = options.audio ? buildAudioArgs(opts.project, opts.resolveAsset ?? ((a) => fileInProject(opts.projectDir, a))) : NO_AUDIO;
   job.warnings = audio.warnings;
-  const ff = spawn(process.env.FFMPEG_PATH || 'ffmpeg', ffmpegArgs(opts.project, opts.outFile, audio));
+  const ff = spawn(process.env.FFMPEG_PATH || 'ffmpeg', ffmpegArgs(opts.project, opts.outFile, audio, options));
   job.ffmpeg = ff;
   let ffErr = '';
   ff.stderr.on('data', (d) => (ffErr += d.toString()));
@@ -159,9 +174,9 @@ function isFinal(job: ExportJob) {
 /** Called for each frame POSTed by the render page, in order. Applies backpressure. */
 export async function acceptFrame(job: ExportJob, index: number, bytes: Buffer): Promise<void> {
   if (isFinal(job)) throw new Error(`Job is ${job.status}`);
-  const { width, height } = job.project.settings;
+  const { outW, outH } = job.size;
   if (index !== job.frame) throw new Error(`Expected frame ${job.frame}, got ${index}`);
-  if (bytes.length !== width * height * 4) throw new Error(`Frame ${index} has ${bytes.length} bytes, expected ${width * height * 4}`);
+  if (bytes.length !== outW * outH * 4) throw new Error(`Frame ${index} has ${bytes.length} bytes, expected ${outW * outH * 4} (${outW}×${outH})`);
   const ff = job.ffmpeg!;
   if (!ff.stdin.write(bytes)) await new Promise<void>((r) => ff.stdin.once('drain', () => r()));
   job.frame = index + 1;
@@ -208,7 +223,18 @@ function cleanup(job: ExportJob, removeOutput = false) {
 }
 
 export function publicJob(job: ExportJob) {
-  return { id: job.id, status: job.status, frame: job.frame, total: job.total, error: job.error, warnings: job.warnings, outFile: job.outFile };
+  return {
+    id: job.id,
+    status: job.status,
+    frame: job.frame,
+    total: job.total,
+    error: job.error,
+    warnings: job.warnings,
+    outFile: job.outFile,
+    width: job.size.outW,
+    height: job.size.outH,
+    options: job.options,
+  };
 }
 
 /** Delete a file, retrying briefly if Windows still has it locked; never throws (it runs in event callbacks). */

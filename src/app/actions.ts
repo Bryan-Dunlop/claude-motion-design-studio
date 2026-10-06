@@ -3,8 +3,9 @@ import type { Draft } from 'immer';
 import { assetUrl } from '../shared/assetUrl';
 import { makeId } from '../shared/presets';
 import { makeLayer, makeScene } from '../shared/factories';
+import { aspectOf, formatSize } from '../shared/fitToFrame';
 import { safeFileName } from '../shared/names';
-import { ASPECTS, emptyProject, ProjectSchema, type Asset, type AudioClip, type Layer, type Project, type Scene, type Settings, type ShapeKind } from '../shared/schema';
+import { emptyProject, ProjectSchema, type Asset, type AudioClip, type Layer, type Project, type Scene, type Settings, type ShapeKind } from '../shared/schema';
 import { clockLabel, duplicateClipsAt, newClip } from './audio/clips';
 import { loadAudioInfo } from './audio/waveform';
 import { copyClips, copyKeys, copyLayers, pasteClips, pasteKeys, pasteKeysMessage, pasteLayers, type Clipboard, type CopiedKey, type PasteKeysResult } from './clipboard';
@@ -356,24 +357,9 @@ export function updateSettings(patch: Partial<Settings>) {
   S().commit((d) => {
     const st = d.settings;
     Object.assign(st, patch);
-    if (patch.aspect && patch.aspect !== 'custom') {
-      // Keep the long edge, change the ratio.
-      const [aw, ah] = ASPECTS[patch.aspect];
-      const long = Math.max(st.width, st.height);
-      if (aw >= ah) {
-        st.width = long;
-        st.height = Math.round((long * ah) / aw / 2) * 2;
-      } else {
-        st.height = long;
-        st.width = Math.round((long * aw) / ah / 2) * 2;
-      }
-    }
-    if (patch.width !== undefined || patch.height !== undefined) {
-      if (!patch.aspect) {
-        const match = Object.entries(ASPECTS).find(([, [aw, ah]]) => Math.abs(st.width / st.height - aw / ah) < 0.002);
-        st.aspect = (match?.[0] as Settings['aspect']) ?? 'custom';
-      }
-    }
+    // A new aspect keeps the long edge and changes the ratio.
+    if (patch.aspect && patch.aspect !== 'custom') Object.assign(st, formatSize(st, patch.aspect));
+    if ((patch.width !== undefined || patch.height !== undefined) && !patch.aspect) st.aspect = aspectOf(st.width, st.height);
     // Layers are never deleted by a settings change.
   });
   const { time, project } = S();
@@ -530,18 +516,40 @@ export async function listProjects() {
   return api<{ name: string; modified: number }[]>('/api/projects');
 }
 
+/**
+ * Write a project folder. When saving under another name than the open project (Save as…, format copies), the server
+ * is told where it came from (`from`): assets of an opened or imported project may exist only in its own folder.
+ */
+function putProject(name: string, project: Project) {
+  const from = S().projectName;
+  const q = from && from !== name ? `?from=${encodeURIComponent(from)}` : '';
+  return api<{ name: string; project: Project }>(`/api/projects/${encodeURIComponent(name)}${q}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(project),
+  });
+}
+
 export async function saveProject(name?: string): Promise<boolean> {
   const target = name ?? S().projectName;
   if (!target) return false;
   try {
     const project = S().project;
-    const r = await api<{ name: string }>(`/api/projects/${encodeURIComponent(target)}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(project),
-    });
+    const r = await putProject(target, project);
     S().markSaved(project, r.name);
     S().toast(`Saved ${r.name}.motion`);
+    return true;
+  } catch (e) {
+    S().toast(`Save failed: ${(e as Error).message}`, 'error');
+    return false;
+  }
+}
+
+/** Save `copy` as a new project called `name` and open it (Make a copy in another format…). */
+export async function saveCopyAs(copy: Project, name: string): Promise<boolean> {
+  try {
+    const r = await putProject(name, copy);
+    S().loadProject(ProjectSchema.parse(r.project), r.name);
     return true;
   } catch (e) {
     S().toast(`Save failed: ${(e as Error).message}`, 'error');

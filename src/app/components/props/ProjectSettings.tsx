@@ -1,9 +1,12 @@
+import { useState } from 'react';
 import { updateSettings } from '../../actions';
 import { useEditor } from '../../store';
+import { FormatCopyDialog } from '../Dialogs';
 import { ColorField, NumberField, Row, Section, Select } from '../Fields';
 
 export function ProjectSettings() {
   const st = useEditor((s) => s.project.settings);
+  const [copying, setCopying] = useState(false);
   return (
     <Section title="Project settings">
       <Row label="Duration" tip="Total length of the video in seconds. Shortening never deletes layers.">
@@ -59,6 +62,16 @@ export function ProjectSettings() {
       <Row label="Background" tip="Colour behind all layers.">
         <ColorField value={st.background} onLive={(background) => useEditor.getState().commit((d) => void (d.settings.background = background))} />
       </Row>
+      <div className="btn-row left">
+        <button
+          onClick={() => setCopying(true)}
+          title="Make a copy of this project in another shape (e.g. 9:16 for Reels). Layers are scaled to fit; this project stays as it is."
+          data-testid="format-copy"
+        >
+          Make a copy in another format…
+        </button>
+      </div>
+      {copying && <FormatCopyDialog onClose={() => setCopying(false)} />}
     </Section>
   );
 }

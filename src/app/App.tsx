@@ -29,6 +29,7 @@ import { Properties } from './components/Properties';
 import { Timeline } from './components/Timeline';
 import { clampTimelineHeight, usePrefs } from './prefs';
 import { useResourceLoader } from './resources';
+import { downloadStill } from './still';
 import { isDirty, snapToFrame, useEditor } from './store';
 
 type DialogKind = 'open' | 'saveAs' | 'export' | null;
@@ -404,6 +405,13 @@ function PlaybackBar() {
         aria-pressed={soundOn}
       >
         {soundOn ? '🔊' : '🔇'} Sound
+      </button>
+      <button
+        onClick={() => void downloadStill()}
+        title={`Save this frame as a PNG image at full size (${project.settings.width}×${project.settings.height})`}
+        data-testid="btn-png"
+      >
+        PNG
       </button>
       {preparing > 0 && (
         <span className="muted small" data-testid="audio-preparing" title="Sound files are being decoded for preview; they join in as soon as they are ready.">

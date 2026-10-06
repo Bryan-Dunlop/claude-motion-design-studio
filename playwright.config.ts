@@ -6,7 +6,8 @@ export default defineConfig({
   testDir: 'tests/e2e',
   timeout: 180_000,
   workers: 1,
-  reporter: [['list']],
+  // On CI also annotate failures in the GitHub UI.
+  reporter: process.env.CI ? [['list'], ['github']] : [['list']],
   use: {
     baseURL: `http://127.0.0.1:${PORT}`,
     viewport: { width: 1500, height: 950 },

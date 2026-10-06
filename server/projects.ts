@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import AdmZip from 'adm-zip';
-import { sanitizeName } from '../src/shared/names';
+import { isPortableName, sanitizeName } from '../src/shared/names';
 import { ProjectSchema, type Asset, type Project } from '../src/shared/schema';
 
 export { sanitizeName };
@@ -43,16 +43,23 @@ export class Workspace {
     return readProjectDir(this.projectDir(name));
   }
 
-  /** Save project.json and copy any not-yet-stored assets in from scratch (byte-for-byte). */
-  save(name: string, data: unknown): Project {
+  /**
+   * Save project.json and copy any not-yet-stored assets in (byte-for-byte). `from` is the project this one was opened
+   * as (Save as… / format copies): its folder is searched before the scratch store, because assets of an opened or
+   * imported project may exist only there.
+   */
+  save(name: string, data: unknown, from?: string): Project {
     const project = parseProject(data);
     const dir = this.projectDir(name);
+    const fromDir = from && sanitizeName(from) ? this.projectDir(from) : null;
     fs.mkdirSync(path.join(dir, 'assets'), { recursive: true });
     for (const a of project.assets) {
       const dest = safeJoin(dir, a.relativePath);
       if (fs.existsSync(dest)) continue;
-      const src = this.scratchFile(a.hash);
-      if (src) fs.copyFileSync(src, dest);
+      const src = this.resolveAsset(fromDir, a);
+      if (!src) continue;
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.copyFileSync(src, dest);
     }
     const tmp = path.join(dir, 'project.json.tmp');
     fs.writeFileSync(tmp, JSON.stringify(project, null, 2));
@@ -142,10 +149,15 @@ function extOf(filename: string): string {
   return m ? m[0].toLowerCase() : '';
 }
 
-/** Join and refuse anything that escapes the base folder (zip-slip / ../ protection). */
+/**
+ * Join and refuse anything that escapes the base folder (zip-slip / ../ protection). Every part of `rel` must also be a
+ * name Windows can store (isPortableName): a project made on a Mac must open on a PC, and a crafted project/zip must not
+ * reach a device such as NUL or an NTFS stream ("logo.png:x").
+ */
 export function safeJoin(base: string, rel: string): string {
   const p = path.resolve(base, rel);
   if (!p.startsWith(path.resolve(base) + path.sep)) throw new HttpError(400, `Unsafe path: ${rel}`);
+  if (!rel.split(/[\\/]/).filter((s) => s !== '' && s !== '.').every(isPortableName)) throw new HttpError(400, `Unsafe path: ${rel}`);
   return p;
 }
 

@@ -33,13 +33,19 @@ export interface Job {
   [k: string]: unknown;
 }
 
-/** Start an export through the same endpoint the Export button uses and wait until it is done. */
+/**
+ * Start an export through the same endpoint the Export button uses and wait until it is done. `body` is
+ * { project, name?, scale?, crf?, preset?, audio? } (export options are optional). A failed job reports its error.
+ */
 export async function runExport(request: APIRequestContext, body: Record<string, unknown>, timeout = 150_000): Promise<Job> {
   const start = await request.post('/api/export', { data: body });
   expect(start.ok(), await start.text()).toBe(true);
   let job = (await start.json()) as Job;
   await expect
-    .poll(async () => (job = await (await request.get(`/api/jobs/${job.id}`)).json()).status, { timeout, intervals: [250] })
+    .poll(async () => {
+      job = await (await request.get(`/api/jobs/${job.id}`)).json();
+      return job.status === 'error' ? `error: ${job.error}` : job.status;
+    }, { timeout, intervals: [250] })
     .toBe('done');
   return job;
 }
@@ -78,15 +84,19 @@ export function probe(file: string, stream = 'v:0') {
   return JSON.parse(out).streams[0];
 }
 
-/** Render `project` at time t in render.html (same browser) and return it as a PNG file path. */
-export async function renderPng(page: Page, project: unknown, t: number, projectName: string | null, outName: string, scale = 1): Promise<string> {
+/**
+ * Render `project` at time t in render.html (same browser) and return it as a PNG file path. `exportScale` renders
+ * exactly like an export at that size (even output size + fill scale, src/shared/exportSize.ts); `scale` is a plain
+ * render scale.
+ */
+export async function renderPng(page: Page, project: unknown, t: number, projectName: string | null, outName: string, scale = 1, exportScale?: number): Promise<string> {
   if (!page.url().includes('/render.html')) {
     await page.goto('/render.html');
     await expect(page).toHaveTitle('render-ready');
   }
   const { png } = await page.evaluate(
-    ({ p, t, projectName, scale }) => (window as any).motion.render(p, t, { projectName: projectName ?? undefined, scale }),
-    { p: project, t, projectName, scale },
+    ({ p, t, projectName, scale, exportScale }) => (window as any).motion.render(p, t, { projectName: projectName ?? undefined, scale, exportScale }),
+    { p: project, t, projectName, scale, exportScale },
   );
   const file = test.info().outputPath(outName);
   fs.writeFileSync(file, Buffer.from(png.split(',')[1], 'base64'));
@@ -99,12 +109,12 @@ export async function renderPng(page: Page, project: unknown, t: number, project
  */
 export async function expectExportMatchesRender(
   page: Page,
-  opts: { project: Project; projectName: string | null; mp4: string; frames: number[]; wrongFrame?: (f: number) => number; maxMeanAbs?: number; minPsnr?: number; scale?: number },
+  opts: { project: Project; projectName: string | null; mp4: string; frames: number[]; wrongFrame?: (f: number) => number; maxMeanAbs?: number; minPsnr?: number; scale?: number; exportScale?: number },
 ) {
   const fps = opts.project.settings.fps;
   const results: { frame: number; meanAbs: number; psnr: number }[] = [];
   for (const frame of opts.frames) {
-    const pngFile = await renderPng(page, opts.project, frame / fps, opts.projectName, `render-${frame}.png`, opts.scale ?? 1);
+    const pngFile = await renderPng(page, opts.project, frame / fps, opts.projectName, `render-${frame}.png`, opts.scale ?? 1, opts.exportScale);
     const expected = rgbFromPng(pngFile);
     const actual = rgbFromVideo(opts.mp4, frame);
     const d = pixelDiff(expected, actual);

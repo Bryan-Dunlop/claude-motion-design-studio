@@ -53,13 +53,17 @@ export function LayerProps({ scene, layer, time }: { scene: Scene; layer: Layer;
         )}
       </Section>
 
+      {/* Type section (open). */}
       {layer.type === 'text' && <TextSection scene={scene} layer={layer} fields={fields} />}
-      {layer.type === 'text' && <TextAnimSection scene={scene} layer={layer} fields={fields} />}
       {layer.type === 'shape' && <ShapeSection scene={scene} layer={layer} fields={fields} />}
       {layer.type === 'image' && <ImageSection scene={scene} layer={layer} fields={fields} />}
       {layer.type === 'cursor' && <CursorPanel layer={layer} scene={scene} />}
 
-      <EffectsSection scene={scene} layer={layer} fields={fields} />
+      {/* Text animation (text) / Draw outline (shapes): collapsed unless in use. */}
+      {layer.type === 'text' && <TextAnimSection scene={scene} layer={layer} fields={fields} />}
+
+      {/* Collapsed unless an effect is in use; keyed so each layer starts in its own open/closed state. */}
+      <EffectsSection key={layer.id} scene={scene} layer={layer} fields={fields} />
 
       <PresetPanel layerIds={[layer.id]} />
     </div>

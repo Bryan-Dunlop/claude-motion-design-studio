@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { applyPreset, DEFAULT_PRESET, presetApplies, type PresetParams } from '../../../shared/presets';
+import { DIRECTION_LABELS } from '../../../shared/transitions';
 import { findLayer, useEditor } from '../../store';
 import { EasingPicker, NumberField, Row, Section, Select } from '../Fields';
 
@@ -58,15 +59,11 @@ export function PresetPanel({ layerIds }: { layerIds: string[] }) {
       </Row>
       {p.kind === 'slide' && (
         <>
-          <Row label="Direction" tip="Direction of travel.">
+          <Row label="Direction" tip="Which way the layer moves.">
             <Select
               value={p.direction}
-              options={[
-                { value: 'up', label: 'Up' },
-                { value: 'down', label: 'Down' },
-                { value: 'left', label: 'Left' },
-                { value: 'right', label: 'Right' },
-              ]}
+              testId="preset-direction"
+              options={(['up', 'down', 'left', 'right'] as const).map((d) => ({ value: d, label: DIRECTION_LABELS[d] }))}
               onChange={(direction) => setP({ ...p, direction })}
             />
           </Row>

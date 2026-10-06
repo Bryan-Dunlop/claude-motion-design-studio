@@ -1,1 +1,6 @@
 /* Styles for lane A (rendering-engine features: effects, transitions, text animation, shapes) — kept separate from styles.css to avoid merge conflicts. */
+.check-row .check { grid-column: 2 / 4; display: flex; align-items: center; gap: 6px; color: #c3c6cf; cursor: pointer; min-width: 0; }
+.check-row input[type='checkbox'] { margin: 0; accent-color: var(--accent); }
+.info-line { margin: 2px 0 0; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Hovering the strip shows "Cross-fade from Hook · 0.6 s"; presses still reach the scene block (drag) and its edges. */
+.transition-strip { pointer-events: auto; }

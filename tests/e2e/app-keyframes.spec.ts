@@ -223,7 +223,9 @@ test('Ctrl+C / Ctrl+V layers into the selected scene at the same timing; Esc fir
   let st = await getState(page);
   const [src] = st.project.scenes[0].layers;
   const [copy] = st.project.scenes[1].layers;
-  expect(copy).toMatchObject({ name: 'Rectangle', start: 1.5, duration: src.duration, x: src.x });
+  // Same timing as when it was copied (since then "+ Scene" made the source end with the shorter Scene 1).
+  expect(copy).toMatchObject({ name: 'Rectangle', start: 1.5, duration: 15, x: src.x });
+  expect(src).toMatchObject({ start: 1.5, duration: 6 });
   expect(copy.id).not.toBe(src.id);
   expect(copy.keyframes.x[0].id).not.toBe(src.keyframes.x[0].id);
   expect((await editor(page)).selection).toMatchObject({ sceneId: st.project.scenes[1].id, layerIds: [copy.id] });

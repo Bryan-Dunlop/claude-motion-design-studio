@@ -1,0 +1,69 @@
+// Scene timing edits (src/app/sceneTiming.ts): layers follow a scene's end when it gets shorter or longer.
+import { produce } from 'immer';
+import { describe, expect, it } from 'vitest';
+import { followSceneEnd, resizeScene } from '../../src/app/sceneTiming';
+import { makeLayer, makeScene } from '../../src/shared/factories';
+import type { Keyframe, Scene } from '../../src/shared/schema';
+
+const FPS = 30;
+const key = (id: string, time: number, value: number): Keyframe => ({ id, time, value, easing: { type: 'linear' } });
+const rect = (id: string, start: number, duration: number, keyframes: Record<string, Keyframe[]> = {}) =>
+  makeLayer({
+    id, name: id, type: 'shape', shape: 'rect', visible: true, locked: false, start, duration, anchorX: 0.5, anchorY: 0.5,
+    x: 0, y: 0, scale: 1, rotation: 0, opacity: 1, keyframes, width: 10, height: 10, cornerRadius: 0, fill: '#fff', stroke: '#000', strokeWidth: 0,
+  });
+
+/** Scene 0–15 s: `full` 0–15, `past` runs past the end (0–20), `early` ends at 4, `late` starts at 10. */
+function scene(): Scene {
+  return makeScene({
+    id: 's', name: 'S', start: 0, duration: 15,
+    layers: [rect('full', 0, 15, { opacity: [key('k1', 0, 0), key('k2', 14.4, 1), key('k3', 15, 0)] }), rect('past', 0, 20), rect('early', 0, 4), rect('late', 10, 5)],
+  });
+}
+const lengths = (s: Scene) => Object.fromEntries(s.layers.map((l) => [l.id, Math.round(l.duration * 1e6) / 1e6]));
+
+describe('followSceneEnd', () => {
+  it('shorter: a layer that would run past the new end ends there (at least a frame); others keep their length', () => {
+    expect(followSceneEnd({ start: 0, duration: 15 }, 15, 7.5, FPS)).toBe(7.5);
+    expect(followSceneEnd({ start: 2, duration: 18 }, 15, 7.5, FPS)).toBe(5.5); // ran past the old end
+    expect(followSceneEnd({ start: 0, duration: 10 }, 15, 7.5, FPS)).toBe(7.5); // ended before the old end, after the new one
+    expect(followSceneEnd({ start: 0, duration: 4 }, 15, 7.5, FPS)).toBe(4); // ends before the new end
+    expect(followSceneEnd({ start: 0, duration: 7.5 }, 15, 7.5, FPS)).toBe(7.5); // ends exactly at the new end
+    expect(followSceneEnd({ start: 7.49, duration: 7.51 }, 15, 7.5, FPS)).toBe(1 / FPS); // never shorter than a frame
+    expect(followSceneEnd({ start: 10, duration: 5 }, 15, 7.5, FPS)).toBe(5); // starts after the new end: unseen, kept
+    expect(followSceneEnd({ start: 7.5, duration: 7.5 }, 15, 7.5, FPS)).toBe(7.5);
+  });
+
+  it('longer: only a layer that ended at the old end (within half a frame) follows it', () => {
+    expect(followSceneEnd({ start: 0, duration: 7.5 }, 7.5, 10, FPS)).toBe(10);
+    expect(followSceneEnd({ start: 2, duration: 5.49 }, 7.5, 10, FPS)).toBe(8); // 0.01 s short of the end
+    expect(followSceneEnd({ start: 0, duration: 4 }, 7.5, 10, FPS)).toBe(4);
+    expect(followSceneEnd({ start: 0, duration: 15 }, 7.5, 10, FPS)).toBe(15); // already ran past it
+    expect(followSceneEnd({ start: 0, duration: 7.5 }, 7.5, 7.5, FPS)).toBe(7.5);
+  });
+});
+
+describe('resizeScene', () => {
+  it('shortens the layers that would run past the new end in the same edit, keeping every keyframe', () => {
+    let changed = 0;
+    const s = produce(scene(), (d) => void (changed = resizeScene(d, 7.5, FPS)));
+    expect(s.duration).toBe(7.5);
+    expect(lengths(s)).toEqual({ full: 7.5, past: 7.5, early: 4, late: 5 });
+    expect(changed).toBe(2);
+    expect(s.layers[0].keyframes).toEqual(scene().layers[0].keyframes);
+  });
+
+  it('longer: layers that ended with the scene follow it', () => {
+    const s = produce(scene(), (d) => void resizeScene(d, 18, FPS));
+    expect(lengths(s)).toEqual({ full: 18, past: 20, early: 4, late: 8 });
+  });
+
+  it('works from the origin during a drag, so going back and forth within the gesture is exact', () => {
+    const origin = scene();
+    let s = origin;
+    for (const d of [12, 5, 3.2, 9, 16, 15]) s = produce(s, (draft) => void resizeScene(draft, d, FPS, origin));
+    expect(lengths(s)).toEqual(lengths(origin));
+    s = produce(s, (draft) => void resizeScene(draft, 9, FPS, origin));
+    expect(lengths(s)).toEqual({ full: 9, past: 9, early: 4, late: 5 });
+  });
+});

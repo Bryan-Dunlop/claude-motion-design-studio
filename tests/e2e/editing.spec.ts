@@ -92,10 +92,11 @@ test('timeline: drag scene boundary, move and trim layer bars, zoom', async ({ p
   await page.getByTestId('add-rect').click();
   const zoom = await page.evaluate(() => (window as any).__motion.useEditor.getState().zoom as number);
 
-  // Trim scene end by -5s via its right edge.
+  // Trim scene end by -5s via its right edge: the layer, which ran to the scene end, now ends there too.
   const sb = (await page.getByTestId('scene-block-Scene 1').boundingBox())!;
   await drag(page, { x: sb.x + sb.width - 2, y: sb.y + sb.height / 2 }, -5 * zoom, 0);
   expect((await getState(page)).project.scenes[0].duration).toBeCloseTo(10, 5);
+  expect((await layerOf(page, 'Rectangle')).duration).toBeCloseTo(10, 5);
 
   // Move the layer bar +2s.
   const lb = (await page.getByTestId('layer-bar-Rectangle').boundingBox())!;
@@ -106,7 +107,7 @@ test('timeline: drag scene boundary, move and trim layer bars, zoom', async ({ p
   const lb2 = (await page.getByTestId('layer-bar-Rectangle').boundingBox())!;
   await drag(page, { x: lb2.x + lb2.width - 2, y: lb2.y + lb2.height / 2 }, -3 * zoom, 0);
   l = await layerOf(page, 'Rectangle');
-  expect(l.duration).toBeCloseTo(12, 5);
+  expect(l.duration).toBeCloseTo(7, 5);
 
   // Zoom with the slider changes pixels-per-second.
   await page.locator('.tl-footer input[type=range]').fill('200');

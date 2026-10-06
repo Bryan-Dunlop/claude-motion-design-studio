@@ -9,6 +9,7 @@ import { emptyProject, ProjectSchema, type Asset, type AudioClip, type Layer, ty
 import { clockLabel, duplicateClipsAt, newClip } from './audio/clips';
 import { loadAudioInfo } from './audio/waveform';
 import { copyClips, copyKeys, copyLayers, pasteClips, pasteKeys, pasteKeysMessage, pasteLayers, type Clipboard, type CopiedKey, type PasteKeysResult } from './clipboard';
+import { resizeScene } from './sceneTiming';
 import { deepCloneLayer, findLayer, snapToFrame, useEditor } from './store';
 
 const S = () => useEditor.getState();
@@ -33,8 +34,9 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
  * Where a new scene goes, so scenes follow each other (and a transition always has a scene to come from):
  * - the first scene covers the whole video;
  * - if there is room after the last scene, the new scene fills it;
- * - otherwise the last scene is split — at the playhead when it is inside that scene, else in the middle.
- * Layers are never deleted or shortened; only the split scene's length changes.
+ * - otherwise the last scene is split — at the playhead when it is inside that scene, else in the middle. Its layers
+ *   that would run past the cut end there (sceneTiming.resizeScene), so their exit animations still play.
+ * Layers and keyframes are never deleted.
  */
 function planNewScene(project: Project, time: number): { scene: Scene; split: { id: string; duration: number } | null } {
   const { durationSec: total, fps } = project.settings;
@@ -60,20 +62,25 @@ function showScene(scene: Scene) {
   if (time < scene.start || time >= scene.start + scene.duration) S().setTime(scene.start);
 }
 
+/** Shorten the scene `split` names (planNewScene) in a draft; returns how many of its layers now end earlier. */
+function applySplit(d: Draft<Project>, split: { id: string; duration: number } | null): number {
+  const s = split && d.scenes.find((x) => x.id === split.id);
+  return s ? resizeScene(s, split.duration, d.settings.fps) : 0;
+}
+
 export function addScene() {
   const { scene, split } = planNewScene(S().project, S().time);
+  let cut = 0;
   S().commit((d) => {
-    if (split) {
-      const s = d.scenes.find((x) => x.id === split.id);
-      if (s) s.duration = split.duration;
-    }
+    cut = applySplit(d, split);
     d.scenes.push(scene);
   });
   S().select({ sceneId: scene.id, layerIds: [], audioIds: [] });
   showScene(scene);
   if (split) {
     const name = S().project.scenes.find((x) => x.id === split.id)?.name ?? 'The previous scene';
-    S().toast(`${scene.name} starts at ${scene.start.toFixed(2)} s — ${name} now ends there.`);
+    const layers = cut === 0 ? '' : cut === 1 ? ' 1 of its layers now ends there too.' : ` ${cut} of its layers now end there too.`;
+    S().toast(`${scene.name} starts at ${scene.start.toFixed(2)} s — ${name} now ends there.${layers}`);
   }
   return scene.id;
 }
@@ -154,10 +161,7 @@ function addLayer(make: (scene: Scene, settings: Settings) => Layer) {
   const sceneId = existing ?? created!.id;
   let id = '';
   S().commit((d) => {
-    if (plan?.split) {
-      const s = d.scenes.find((x) => x.id === plan.split!.id);
-      if (s) s.duration = plan.split.duration;
-    }
+    applySplit(d, plan?.split ?? null);
     if (created) d.scenes.push(created);
     const scene = d.scenes.find((s) => s.id === sceneId) as Scene | undefined;
     if (!scene) return;

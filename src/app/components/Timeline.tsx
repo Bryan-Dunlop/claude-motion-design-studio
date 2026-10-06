@@ -3,6 +3,7 @@ import { propLabel } from '../../shared/propLabels';
 import { ANIMATABLE, type Layer, type Scene } from '../../shared/schema';
 import { startDrag } from '../drag';
 import { clampTimelineHeight, usePrefs } from '../prefs';
+import { resizeScene } from '../sceneTiming';
 import { dropKeysUnderMoved, snapToFrame, useEditor } from '../store';
 import { timeSnapper, useTimeSnapLine } from '../timelineSnap';
 import { AudioRows } from './AudioRows';
@@ -84,7 +85,8 @@ export function Timeline() {
     });
   };
 
-  // Scene block: body moves, edges trim. Its layers move with its start, so they aren't snap targets then.
+  // Scene block: body moves, edges trim. Its layers move with its start, so they aren't snap targets then. A trim also
+  // takes the layers' ends along (resizeScene), always worked out from the scene as it was when the drag started.
   const dragScene = (e: React.PointerEvent, s: Scene, mode: 'move' | 'start' | 'end') => {
     e.stopPropagation();
     st().select({ sceneId: s.id, layerIds: [], audioIds: [] });
@@ -101,10 +103,10 @@ export function Timeline() {
         st().updateGesture((d) => {
           const sc = d.scenes.find((x) => x.id === s.id)!;
           if (mode === 'move') sc.start = Math.max(0, start + dt);
-          if (mode === 'end') sc.duration = Math.max(1 / fps, duration + dt);
+          if (mode === 'end') resizeScene(sc, Math.max(1 / fps, duration + dt), fps, s);
           if (mode === 'start') {
             const ns = Math.min(Math.max(0, start + dt), start + duration - 1 / fps);
-            sc.duration = start + duration - ns;
+            resizeScene(sc, start + duration - ns, fps, s);
             sc.start = ns;
           }
         });

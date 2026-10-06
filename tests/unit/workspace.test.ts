@@ -69,7 +69,11 @@ describe('folders renamed or copied by hand open as themselves', () => {
     const { ws, root } = workspace();
     ws.save('Promo', project('#ff0000'));
     ws.save('Promo 1', project('#00ff00'));
-    for (const copy of ['Promo (1)', 'Café promo', 'Promo v1.2', '日本語']) fs.cpSync(path.join(root, 'Promo.motion'), path.join(root, `${copy}.motion`), { recursive: true });
+    // Copied by hand: mkdir + copyFile (fs.cpSync garbles non-ASCII folder names on Windows).
+    for (const copy of ['Promo (1)', 'Café promo', 'Promo v1.2', '日本語']) {
+      fs.mkdirSync(path.join(root, `${copy}.motion`));
+      fs.copyFileSync(path.join(root, 'Promo.motion', 'project.json'), path.join(root, `${copy}.motion`, 'project.json'));
+    }
     for (const name of ['Promo (1)', 'Café promo', 'Promo v1.2', '日本語']) {
       expect(ws.list().map((p) => p.name)).toContain(name);
       expect(ws.read(name).settings.background, name).toBe('#ff0000');

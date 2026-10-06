@@ -108,6 +108,21 @@ test("kerned 'AVATAR': per-letter drawing at e = 1 is pixel-identical to the who
   }
 });
 
+test('right-to-left lines: words (and Hebrew letters) at rest sit exactly where the whole line draws them', async ({ page }) => {
+  // Before: units were placed left to right in reading order, so the first Hebrew word was drawn on the left.
+  const cases: [Project, TextAnim['unit']][] = [
+    [project(1200, 400, 1, [text('h', 'שלום עולם יפה', 600, 200, 1, { fontSize: 110, fontWeight: 700 })]), 'word'],
+    [project(1200, 400, 1, [text('h', 'שלום עולם', 600, 200, 1, { fontSize: 110, fontWeight: 700, align: 'right' })]), 'char'],
+    [project(1200, 400, 1, [text('a', 'مرحبا بالعالم', 600, 200, 1, { fontSize: 110, fontWeight: 400 })]), 'word'],
+  ];
+  for (const [p, kind] of cases) {
+    const r = await unitsVsLine(page, p, kind, 1);
+    console.log(`${(p.scenes[0].layers[0] as { content: string }).content} by ${kind}: max diff ${r.kerned.max} (${r.kerned.bytes} bytes)`);
+    expect(r.units).toBeGreaterThan(1);
+    expect(r.kerned).toEqual({ max: 0, bytes: 0 });
+  }
+});
+
 test('a typewriter half-way through draws the typed letters exactly where the whole line puts them', async ({ page }) => {
   // Left-aligned with the anchor on the left edge, so 'AVATAR ' sits at the same place in both projects.
   const over = { align: 'left', anchorX: 0, fontSize: 120 };

@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { resolveLayer } from '../../shared/interpolate';
-import { activeScenes, applyMatrix, cursorPosition, isLayerActive, layerBox, layerMatrix, renderFrame } from '../../shared/renderFrame';
+import { resetContext } from '../../shared/canvas';
+import { activeScenes, applyMatrix, cursorPosition, isLayerActive, lastFrameTime, layerBox, layerMatrix, renderFrame } from '../../shared/renderFrame';
 import type { CursorLayer, CursorPoint, Layer, Project, Scene } from '../../shared/schema';
 import { importFiles } from '../actions';
 import { startDrag } from '../drag';
@@ -131,6 +132,8 @@ export function Preview() {
   const [dragOver, setDragOver] = useState(false);
   const [marquee, setMarquee] = useState<Box | null>(null);
   const [snapLines, setSnapLines] = useState<{ x: number[]; y: number[] } | null>(null);
+  const [frameError, setFrameError] = useState<string | null>(null);
+  const loggedError = useRef<string | null>(null);
   const guidesOn = usePrefs((s) => s.guides);
   const { width: W, height: H } = project.settings;
 
@@ -145,6 +148,10 @@ export function Preview() {
   const cssW = Math.round(W * fit);
   const cssH = Math.round(H * fit);
 
+  // The playhead can rest at durationSec (where playback stops), past the last frame: show that last frame, like the
+  // frame counter, the PNG still and the MP4 do.
+  const shownTime = Math.min(time, lastFrameTime(project));
+
   // Draw. The preview canvas is sized in device pixels, so renderFrame draws vectors at full sharpness.
   useEffect(() => {
     const canvas = canvasRef.current!;
@@ -154,10 +161,21 @@ export function Preview() {
     if (canvas.width !== pw) canvas.width = pw;
     if (canvas.height !== ph) canvas.height = ph;
     const ctx = canvas.getContext('2d')!;
-    renderFrame(project, time, ctx, pw / W, resources);
-  }, [project, time, resources, cssW, cssH, W]);
+    try {
+      renderFrame(project, shownTime, ctx, pw / W, resources);
+      setFrameError(null);
+      loggedError.current = null;
+    } catch (err) {
+      // A frame that cannot be drawn must not take the editor (and unsaved work) down with it.
+      const message = (err as Error)?.message ?? String(err);
+      if (loggedError.current !== message) console.error(err);
+      loggedError.current = message;
+      resetContext(ctx);
+      setFrameError(message);
+    }
+  }, [project, shownTime, resources, cssW, cssH, W]);
 
-  const placed = visibleLayers(project, time);
+  const placed = visibleLayers(project, shownTime);
   const selected = placed.filter((p) => selection.layerIds.includes(p.layer.id));
   const toProject = (e: { clientX: number; clientY: number }) => {
     const r = canvasRef.current!.getBoundingClientRect();
@@ -343,6 +361,11 @@ export function Preview() {
     >
       <div className="stage" style={{ width: cssW, height: cssH }}>
         <canvas ref={canvasRef} data-testid="preview-canvas" style={{ width: cssW, height: cssH }} />
+        {frameError && (
+          <div className="frame-error" data-testid="frame-error" style={{ width: cssW, height: cssH }}>
+            This frame could not be drawn: {frameError}
+          </div>
+        )}
         <svg className="overlay" viewBox={`0 0 ${W} ${H}`} width={cssW} height={cssH} data-testid="preview-overlay">
           {guidesOn && <GuidesOverlay W={W} H={H} fit={fit} />}
           {selected.map((p) => (

@@ -19,6 +19,9 @@ export interface Recorder {
 /** State a fresh 2D context starts with (reads of never-assigned state return these instead of a function). */
 const DEFAULT_STATE: Record<string, unknown> = { globalAlpha: 1, globalCompositeOperation: 'source-over', filter: 'none', lineWidth: 1 };
 
+/** Radius arguments a real canvas rejects when negative (it throws IndexSizeError instead of drawing). */
+const RADIUS_ARGS: Record<string, number[]> = { arc: [2], arcTo: [4], ellipse: [2, 3] };
+
 export function recordingCtx(width = 1920, height = 1080, name = 'main'): Recorder {
   const log: string[] = [];
   const children: Recorder[] = [];
@@ -35,7 +38,11 @@ export function recordingCtx(width = 1920, height = 1080, name = 'main'): Record
           return { addColorStop: (o: number, c: string) => log.push(`addColorStop(${JSON.stringify([o, c])})`) };
         };
       if (prop in t) return t[prop];
-      return (...args: unknown[]) => log.push(`${prop}(${JSON.stringify(args, (_k, v) => (v && typeof v === 'object' && 'name' in v && 'width' in v ? `<canvas ${v.name}>` : v))})`);
+      return (...args: unknown[]) => {
+        for (const i of RADIUS_ARGS[prop] ?? [])
+          if ((args[i] as number) < 0) throw new DOMException(`Failed to execute '${prop}': The radius provided (${args[i]}) is negative.`, 'IndexSizeError');
+        return log.push(`${prop}(${JSON.stringify(args, (_k, v) => (v && typeof v === 'object' && 'name' in v && 'width' in v ? `<canvas ${v.name}>` : v))})`);
+      };
     },
     set(t, prop: string, v) {
       t[prop] = v;

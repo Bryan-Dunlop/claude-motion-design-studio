@@ -14,6 +14,7 @@ import {
   isEmptyBox,
   layerBox,
   layerMatrix,
+  lineIsRtl,
   lineX,
   measureText,
   multiplyMatrix,
@@ -27,7 +28,7 @@ import {
   type Matrix,
 } from './geometry';
 import { AA_PAD, GLYPH_PAD, inkBoundsResolved } from './inkBounds';
-import { resolveLayer } from './interpolate';
+import { parseColor, resolveLayer } from './interpolate';
 import type { CursorLayer, ImageLayer, Layer, Project, Scene, ShapeLayer, TextLayer } from './schema';
 import { linearGradient, shapeTrim, traceShape } from './shapes';
 import { textAnimating, textAnimFrame, type DrawUnit } from './textAnim';
@@ -117,12 +118,8 @@ function drawCursor(ctx: Ctx2D, layer: CursorLayer, local: number) {
   ctx.restore();
 }
 
-function isDark(hex: string): boolean {
-  const s = hex.replace('#', '');
-  if (s.length < 6) return true;
-  const r = parseInt(s.slice(0, 2), 16);
-  const g = parseInt(s.slice(2, 4), 16);
-  const b = parseInt(s.slice(4, 6), 16);
+function isDark(color: string): boolean {
+  const [r, g, b] = parseColor(color);
   return r * 0.299 + g * 0.587 + b * 0.114 < 140;
 }
 
@@ -156,7 +153,12 @@ function drawText(ctx: Ctx2D, layer: TextLayer, local: number, scale: number, de
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'left';
     const draw = (op: 'strokeText' | 'fillText') =>
-      m.lines.forEach((line, i) => ctx[op](line.text, lineX(layer.align, m.w, line.width), i * m.lineHeightPx + m.lineHeightPx / 2));
+      m.lines.forEach((line, i) => {
+        const rtl = lineIsRtl(line.text);
+        if (rtl) ctx.direction = 'rtl';
+        ctx[op](line.text, lineX(layer.align, m.w, line.width), i * m.lineHeightPx + m.lineHeightPx / 2);
+        if (rtl) ctx.direction = 'inherit';
+      });
     if (layer.strokeWidth > 0) {
       setTextOutline(ctx, layer);
       draw('strokeText');
@@ -203,6 +205,7 @@ export function drawTextUnits(ctx: Ctx2D, layer: TextLayer, units: readonly Draw
         ctx.setTransform(device[0], device[1], device[2], device[3], device[4], device[5]);
       }
       ctx.globalAlpha *= alpha;
+      if (u.rtl) ctx.direction = 'rtl';
       if (s !== 1 || tx !== 0 || ty !== 0) ctx.transform(s, 0, 0, s, tx, ty);
       if (radii.length) ctx.filter = radii.map((r) => `blur(${r}px)`).join(' ');
       ctx[op](u.text, u.x, u.y);
@@ -440,8 +443,7 @@ function blurSide(ctx: Ctx2D, project: Project, scene: Scene | null, local: numb
   const ph = ctx.canvas.height + 2 * m;
   const padded = acquire(res, pw, ph);
   const c = padded.ctx;
-  c.fillStyle = scene?.background ?? background;
-  c.fillRect(0, 0, pw, ph);
+  fillBase(c, background, scene?.background ?? null, pw, ph);
   c.drawImage(ctx.canvas, m, m);
   if (scene) {
     c.setTransform(scale, 0, 0, scale, m, m);
@@ -492,6 +494,23 @@ function drawTransition(ctx: Ctx2D, project: Project, t: number, plan: Transitio
   ctx.restore();
 }
 
+const isOpaqueHex = (c: string) => /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(c.trim());
+
+/**
+ * The blur style's padding colour over (0, 0, w, h): what the frame shows at its edges, i.e. the scene's background
+ * over the project background over opaque black (each only where the one above can be see-through).
+ */
+function fillBase(ctx: Ctx2D, background: string, sceneBackground: string | null, w: number, h: number) {
+  const fill = (c: string) => {
+    ctx.fillStyle = c;
+    ctx.fillRect(0, 0, w, h);
+  };
+  if (sceneBackground && isOpaqueHex(sceneBackground)) return fill(sceneBackground);
+  if (!isOpaqueHex(background)) fill('#000000');
+  fill(background);
+  if (sceneBackground) fill(sceneBackground);
+}
+
 /**
  * Draw one frame of `project` at `timeSec` into ctx.
  * `scale` maps project pixels to canvas pixels (1 for export, viewport-fit * devicePixelRatio for preview).
@@ -501,6 +520,15 @@ export function renderFrame(project: Project, timeSec: number, ctx: Ctx2D, scale
   const { width, height, background } = project.settings;
   ctx.save();
   try {
+    if (!isOpaqueHex(background)) {
+      // A see-through background (#rrggbbaa) goes over opaque black: every frame is opaque, so it never shows the
+      // previous frame (or the page) through it and depends on nothing but (project, t).
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    }
     ctx.setTransform(scale, 0, 0, scale, 0, 0);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
@@ -532,4 +560,9 @@ export function frameCount(project: Project): number {
 
 export function frameTime(project: Project, frame: number): number {
   return frame / project.settings.fps;
+}
+
+/** Time of the last exported frame. The playhead can sit at durationSec, past it, where no scene is active. */
+export function lastFrameTime(project: Project): number {
+  return frameTime(project, frameCount(project) - 1);
 }

@@ -15,6 +15,7 @@ import {
   inflateBox,
   isEmptyBox,
   layerMatrix,
+  lineIsRtl,
   lineX,
   roundOutBox,
   setLetterSpacing,
@@ -49,7 +50,13 @@ function textInk(ctx: Ctx2D, layer: TextLayer, local: number): { ink: Box; box: 
   setLetterSpacing(ctx, layer.letterSpacing);
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'left';
-  const lines = layer.content.split('\n').map((text) => ({ text, m: ctx.measureText(text) }));
+  const lines = layer.content.split('\n').map((text) => {
+    if (!lineIsRtl(text)) return { text, m: ctx.measureText(text) };
+    ctx.direction = 'rtl';
+    const m = ctx.measureText(text);
+    ctx.direction = 'inherit';
+    return { text, m };
+  });
   ctx.restore();
   const lh = layer.fontSize * layer.lineHeight;
   const box = { w: Math.max(1, ...lines.map((l) => l.m.width)), h: Math.max(1, lines.length * lh) };
@@ -113,7 +120,7 @@ function cursorInk(layer: CursorLayer, local: number): Box {
     [pos.x + (ARROW_W + h) * s, pos.y + (ARROW_H + h) * s],
   ]);
   for (const r of cursorRipples(layer, local)) {
-    const R = Math.abs(r.radius);
+    const R = r.radius;
     box = unionBox(box, { x0: pos.x - R, y0: pos.y - R, x1: pos.x + R, y1: pos.y + R });
   }
   return box;

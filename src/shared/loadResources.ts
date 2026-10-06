@@ -1,4 +1,5 @@
 // Browser-only: decode images and register fonts so renderFrame can draw synchronously.
+import { cssFontFamily } from './geometry';
 import type { Project } from './schema';
 import type { RenderResources } from './renderFrame';
 
@@ -65,11 +66,13 @@ export async function loadResources(project: Project, urlFor: (assetId: string) 
       }
     }),
   );
-  // Make sure the built-in font (and every weight used) is ready before the first frame.
+  // Make sure the built-in font (and every weight used) is ready before the first frame. The text itself is the
+  // sample: fonts split by script (Inter ships Latin, Latin-ext, Cyrillic, Greek, Vietnamese… as separate files) load
+  // only the parts that cover it, and without it only the Latin part would be ready for the first frames.
   const loads: Promise<unknown>[] = [];
   for (const scene of project.scenes)
     for (const l of scene.layers)
-      if (l.type === 'text') loads.push(document.fonts.load(`${l.fontWeight} 32px "${l.fontFamily}"`).catch(() => undefined));
+      if (l.type === 'text') loads.push(document.fonts.load(`${l.fontWeight} 32px ${cssFontFamily(l.fontFamily)}`, l.content || ' ').catch(() => undefined));
   await Promise.all(loads);
   await document.fonts.ready;
   return { images, missing };

@@ -19,6 +19,13 @@ export function useResourceLoader() {
   const assets = useEditor((s) => s.project.assets);
   const projectName = useEditor((s) => s.projectName);
   useEffect(() => {
+    // The browser fetches a font weight or script the moment a frame first needs it (e.g. after typing Cyrillic or
+    // picking a new weight) and draws that frame in a fallback font meanwhile: redraw once it has arrived.
+    const redraw = () => useResources.setState((s) => ({ resources: { ...s.resources } }));
+    document.fonts.addEventListener('loadingdone', redraw);
+    return () => document.fonts.removeEventListener('loadingdone', redraw);
+  }, []);
+  useEffect(() => {
     let cancelled = false;
     useResources.setState({ loading: true });
     const project = useEditor.getState().project;

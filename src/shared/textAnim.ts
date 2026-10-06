@@ -3,7 +3,7 @@
 // randomness; measuring needs a 2D context but leaves its state unchanged. Used by drawText, inkBounds and the
 // Properties panel (styles table).
 import { applyEasing } from './easing';
-import { EMPTY_BOX, fontString, lineX, measureText, setLetterSpacing, type Box, type Ctx2D } from './geometry';
+import { EMPTY_BOX, fontString, lineIsMixed, lineIsRtl, lineX, measureText, setLetterSpacing, type Box, type Ctx2D } from './geometry';
 import { seededRandom } from './presets';
 import type { Easing, TextAnim, TextLayer } from './schema';
 
@@ -34,7 +34,10 @@ export function graphemes(s: string, segmenter: Pick<Intl.Segmenter, 'segment'> 
  * (whitespace-separated, trailing spaces stay with the word) or the whole line. Blank lines have no word/line units.
  */
 export function lineUnits(line: string, kind: UnitKind): { start: number; text: string }[] {
-  if (kind === 'line') return line.trim() ? [{ start: 0, text: line }] : [];
+  // Mixed directions, or digits among right-to-left letters (numbers read left to right inside them), are reordered
+  // by the browser: such a line animates as one unit.
+  const whole = kind === 'line' || lineIsMixed(line) || (kind === 'char' && lineIsRtl(line) && /\p{Nd}/u.test(line));
+  if (whole) return line.trim() ? [{ start: 0, text: line }] : [];
   if (kind === 'word') return Array.from(line.matchAll(/\S+\s*/g), (m) => ({ start: m.index ?? 0, text: m[0] }));
   const out: { start: number; text: string }[] = [];
   let i = 0;
@@ -227,6 +230,8 @@ export function textAnimating(layer: TextLayer, local: number): boolean {
 export interface PlacedUnit extends UnitSpan {
   x: number;
   y: number;
+  /** On a right-to-left line: drawn with ctx.direction 'rtl', and the first unit is the rightmost. */
+  rtl?: true;
   /** Advance width. */
   width: number;
   /** Glyph box at rest (actualBoundingBox), layer-box coordinates. */
@@ -255,14 +260,19 @@ export function layoutUnits(ctx: Ctx2D, layer: TextLayer, kind: UnitKind): Place
   lines.forEach((line, li) => {
     const lx = lineX(layer.align, w, widths[li]);
     const y = li * lh + lh / 2;
+    const rtl = lineIsRtl(line);
+    if (rtl) ctx.direction = 'rtl';
     for (const u of lineUnits(line, kind)) {
       const m = ctx.measureText(u.text);
-      const x = lx + (u.start > 0 ? ctx.measureText(line.slice(0, u.start + u.text.length)).width - m.width : 0);
+      const through = u.start > 0 ? ctx.measureText(line.slice(0, u.start + u.text.length)).width : m.width;
+      // Right to left, the text before a unit lies to its right.
+      const x = rtl ? lx + widths[li] - through : lx + through - m.width;
       const ink = u.text.trim()
         ? { x0: x - finite(m.actualBoundingBoxLeft, 0), x1: x + finite(m.actualBoundingBoxRight, m.width), y0: y - finite(m.actualBoundingBoxAscent, layer.fontSize), y1: y + finite(m.actualBoundingBoxDescent, layer.fontSize) }
         : EMPTY_BOX;
-      out.push({ line: li, start: u.start, end: u.start + u.text.length, text: u.text, x, y, width: m.width, ink });
+      out.push({ line: li, start: u.start, end: u.start + u.text.length, text: u.text, x, y, width: m.width, ink, ...(rtl ? { rtl: true as const } : {}) });
     }
+    if (rtl) ctx.direction = 'inherit';
   });
   ctx.restore();
   return out;
@@ -317,13 +327,17 @@ export function textAnimFrame(ctx: Ctx2D, layer: TextLayer, local: number): Text
 
 /** The caret bar after the last visible character (at the start of the text before anything shows). */
 function caretBox(ctx: Ctx2D, layer: TextLayer, units: DrawUnit[] | null): Box {
+  // ax = where the text ends so far; right to left, the text grows leftwards and the caret sits on its left.
   let ax: number;
   let ay: number;
+  let rtl: boolean;
   if (units?.length) {
     let last = units.length - 1;
     while (last >= 0 && !(units[last].look.alpha > 0)) last--;
     const u = units[Math.max(0, last)];
-    ax = last >= 0 ? u.x + u.width : u.x;
+    rtl = !!u.rtl;
+    const end = last >= 0;
+    ax = rtl === end ? u.x : u.x + u.width;
     ay = u.y;
   } else {
     // The whole text shows: after the end of the last line that has any characters.
@@ -331,11 +345,12 @@ function caretBox(ctx: Ctx2D, layer: TextLayer, units: DrawUnit[] | null): Box {
     let li = m.lines.length - 1;
     while (li > 0 && !m.lines[li].text) li--;
     const line = m.lines[li];
-    ax = lineX(layer.align, m.w, line.width) + line.width;
+    rtl = lineIsRtl(line.text);
+    ax = lineX(layer.align, m.w, line.width) + (rtl ? 0 : line.width);
     ay = li * m.lineHeightPx + m.lineHeightPx / 2;
   }
   const fs = layer.fontSize;
-  const x0 = ax + CARET.gap * fs;
+  const x0 = rtl ? ax - (CARET.gap + CARET.width) * fs : ax + CARET.gap * fs;
   return { x0, x1: x0 + CARET.width * fs, y0: ay - (CARET.height * fs) / 2, y1: ay + (CARET.height * fs) / 2 };
 }
 
@@ -390,7 +405,8 @@ export function caretRegion(layer: TextLayer, box: { w: number; h: number }): Bo
   const lh = fs * layer.lineHeight;
   const lines = layer.content.split('\n').length;
   const half = (CARET.height * fs) / 2;
-  return { x0: -0.1 * fs, x1: box.w + (CARET.gap + CARET.width + 0.1) * fs, y0: lh / 2 - half, y1: (lines - 1) * lh + lh / 2 + half };
+  const reach = (CARET.gap + CARET.width + 0.1) * fs;
+  return { x0: -reach, x1: box.w + reach, y0: lh / 2 - half, y1: (lines - 1) * lh + lh / 2 + half };
 }
 
 // ---------------------------------------------------------------- styles

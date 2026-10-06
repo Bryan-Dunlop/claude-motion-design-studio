@@ -5,9 +5,44 @@ import type { CursorLayer, Layer, TextLayer } from './schema';
 
 export type Ctx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 
+const GENERIC_FAMILIES = new Set(['serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui', 'ui-serif', 'ui-sans-serif', 'ui-monospace', 'ui-rounded', 'math', 'emoji', 'fangsong']);
+const RESERVED_WORDS = new Set(['inherit', 'initial', 'unset', 'default', 'revert', 'revert-layer']);
+
+/**
+ * A font family (or comma-separated list) as CSS: generic families and plain one-word names stay bare, everything
+ * else is quoted. A bare name that starts with a digit ("3Dee") or is a reserved word ("Default") makes the whole
+ * font shorthand invalid, and the canvas then silently keeps drawing at 10px sans-serif.
+ */
+export function cssFontFamily(family: string): string {
+  return family
+    .split(',')
+    .map((f) => f.trim().replace(/^(["'])(.*)\1$/, '$2'))
+    .filter(Boolean)
+    .map((f) => {
+      const lower = f.toLowerCase();
+      if (GENERIC_FAMILIES.has(lower) || (/^[A-Za-z_][A-Za-z0-9_-]*$/.test(f) && !RESERVED_WORDS.has(lower))) return f;
+      return `"${f.replace(/[\\"]/g, '\\$&')}"`;
+    })
+    .join(', ');
+}
+
 export function fontString(layer: Pick<TextLayer, 'fontWeight' | 'fontSize' | 'fontFamily'>): string {
-  const fam = /[\s,'"]/.test(layer.fontFamily) && !layer.fontFamily.includes(',') ? `"${layer.fontFamily}"` : layer.fontFamily;
-  return `${layer.fontWeight} ${layer.fontSize}px ${fam}, sans-serif`;
+  return `${layer.fontWeight} ${layer.fontSize}px ${cssFontFamily(layer.fontFamily)}, sans-serif`;
+}
+
+const RTL_SCRIPTS = '\\p{Script=Hebrew}\\p{Script=Arabic}\\p{Script=Syriac}\\p{Script=Thaana}\\p{Script=Nko}\\p{Script=Samaritan}\\p{Script=Mandaic}\\p{Script=Adlam}';
+const FIRST_LETTER = new RegExp(`([${RTL_SCRIPTS}])|\\p{L}`, 'u');
+const RTL_LETTER = new RegExp(`[${RTL_SCRIPTS}]`, 'u');
+const LTR_LETTER = new RegExp(`(?![${RTL_SCRIPTS}])\\p{L}`, 'u');
+
+/** A line whose first letter is Hebrew, Arabic… is drawn as a right-to-left paragraph (ctx.direction 'rtl'). */
+export function lineIsRtl(line: string): boolean {
+  return FIRST_LETTER.exec(line)?.[1] !== undefined;
+}
+
+/** Letters of both directions on one line: the browser reorders them (bidi), so its words can't be placed one by one. */
+export function lineIsMixed(line: string): boolean {
+  return RTL_LETTER.test(line) && LTR_LETTER.test(line);
 }
 
 export function setLetterSpacing(ctx: Ctx2D, px: number) {
@@ -131,7 +166,8 @@ export function cursorRipples(layer: CursorLayer, local: number): { radius: numb
     if (dt < 0 || dt >= CURSOR_RIPPLE_SEC) continue;
     const p = dt / CURSOR_RIPPLE_SEC;
     const eased = applyEasing({ type: 'easeOut' }, p);
-    out.push({ radius: layer.size * (0.2 + 1.3 * eased) * layer.scale, alpha: 1 - p });
+    // Unsigned: an overshooting scale (a spring, or a curve dipping below 0) mirrors the pointer, not the ring.
+    out.push({ radius: Math.abs(layer.size * (0.2 + 1.3 * eased) * layer.scale), alpha: 1 - p });
   }
   return out;
 }

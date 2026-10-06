@@ -21,11 +21,31 @@ export class Workspace {
     fs.mkdirSync(this.exports, { recursive: true });
   }
 
-  /** Validate a user-supplied project name and return its folder. */
+  /**
+   * The folder of a project: an existing project by the exact name Open lists (a folder renamed or copied by hand may
+   * use any character its file system allows), else the folder a new project of that name gets (sanitized).
+   */
   projectDir(name: string): string {
+    return this.existingDir(name) ?? this.newDir(name);
+  }
+
+  /** The name a project is known by: an existing folder's exact name, else the sanitized one. */
+  projectName(name: string): string {
+    return this.existingDir(name) ? name : sanitizeName(name);
+  }
+
+  private newDir(name: string): string {
     const clean = sanitizeName(name);
     if (!clean) throw new HttpError(400, 'Invalid project name');
     return path.join(this.root, `${clean}.motion`);
+  }
+
+  /** An existing project folder named exactly `<name>.motion` directly inside the workspace, or null. */
+  private existingDir(name: string): string | null {
+    if (!name || /[\\/:\0]/.test(name)) return null;
+    const dir = path.join(this.root, `${name}.motion`);
+    if (path.dirname(dir) !== this.root) return null;
+    return fs.existsSync(path.join(dir, 'project.json')) ? dir : null;
   }
 
   list(): { name: string; modified: number }[] {
@@ -51,19 +71,23 @@ export class Workspace {
   save(name: string, data: unknown, from?: string): { project: Project; missing: string[] } {
     const project = parseProject(data);
     const dir = this.projectDir(name);
-    const fromDir = from && sanitizeName(from) ? this.projectDir(from) : null;
+    const fromDir = from ? (this.existingDir(from) ?? this.existingDir(sanitizeName(from))) : null;
     const missing: string[] = [];
     fs.mkdirSync(path.join(dir, 'assets'), { recursive: true });
     for (const a of project.assets) {
       const dest = safeJoin(dir, a.relativePath);
-      if (fs.existsSync(dest)) continue;
       const src = this.resolveAsset(fromDir, a);
+      if (fs.existsSync(dest)) {
+        // Already there; replaced only when it is a cut-off copy of the source (left by a save that failed half-way).
+        if (src && src !== dest && isTruncatedCopy(dest, src)) copyAtomic(src, dest);
+        continue;
+      }
       if (!src) {
         missing.push(a.originalName);
         continue;
       }
       fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.copyFileSync(src, dest);
+      copyAtomic(src, dest);
     }
     const tmp = path.join(dir, 'project.json.tmp');
     fs.writeFileSync(tmp, JSON.stringify(project, null, 2));
@@ -71,11 +95,14 @@ export class Workspace {
     return { project, missing };
   }
 
-  /** Store uploaded bytes untouched, addressed by sha256. */
+  /**
+   * Store uploaded bytes untouched, addressed by sha256. Written to a temporary file first, so a failed write (disk
+   * full) never leaves a cut-off file under the hash; one of the wrong size is rewritten.
+   */
   storeScratch(bytes: Buffer, filename: string): { hash: string } {
     const hash = crypto.createHash('sha256').update(bytes).digest('hex');
     const file = path.join(this.scratch, hash + extOf(filename));
-    if (!fs.existsSync(file)) fs.writeFileSync(file, bytes);
+    if (fileSize(file) !== bytes.length) writeAtomic(file, bytes);
     return { hash };
   }
 
@@ -116,19 +143,39 @@ export class Workspace {
     if (!jsonName) throw new HttpError(400, 'Zip does not contain a project.json');
     const prefix = jsonName.slice(0, -'project.json'.length);
     const project = parseProject(parseJsonText(entries.get(jsonName)!.getData().toString('utf8')));
-    let name = sanitizeName(preferredName) || 'Imported';
-    for (let i = 2; fs.existsSync(this.projectDir(name)); i++) name = `${sanitizeName(preferredName) || 'Imported'} ${i}`;
-    const dir = this.projectDir(name);
-    fs.mkdirSync(path.join(dir, 'assets'), { recursive: true });
-    for (const a of project.assets) {
-      const e = entries.get(prefix + toSlashes(a.relativePath));
-      if (!e) continue;
-      const dest = safeJoin(dir, a.relativePath);
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.writeFileSync(dest, e.getData());
+    // Every path is checked before anything is written, and the project is built in a hidden folder that becomes
+    // <name>.motion only when complete: a rejected or failed import leaves nothing behind.
+    const tmp = path.join(this.root, `.import-${crypto.randomUUID()}`);
+    const files = project.assets.map((a) => ({ dest: safeJoin(tmp, a.relativePath), entry: entries.get(prefix + toSlashes(a.relativePath)) }));
+    try {
+      fs.mkdirSync(path.join(tmp, 'assets'), { recursive: true });
+      for (const { dest, entry } of files) {
+        if (!entry) continue;
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.writeFileSync(dest, entry.getData());
+      }
+      fs.writeFileSync(path.join(tmp, 'project.json'), JSON.stringify(project, null, 2));
+      const name = this.freeName(preferredName);
+      renameWithRetry(tmp, path.join(this.root, `${name}.motion`));
+      return { name, project };
+    } catch (e) {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      throw e;
     }
-    fs.writeFileSync(path.join(dir, 'project.json'), JSON.stringify(project, null, 2));
-    return { name, project };
+  }
+
+  /**
+   * A project name no folder uses yet: "Name", then "Name 2", "Name 3"… The number always fits: the name is
+   * shortened first (names are cut at 80 characters, which used to cut the number off and loop forever).
+   */
+  freeName(preferred: string): string {
+    const base = sanitizeName(preferred) || 'Imported';
+    for (let i = 1; i <= 10_000; i++) {
+      const suffix = i === 1 ? '' : ` ${i}`;
+      const name = sanitizeName(`${base.slice(0, 80 - suffix.length).trimEnd()}${suffix}`);
+      if (name && !fs.existsSync(path.join(this.root, `${name}.motion`))) return name;
+    }
+    throw new HttpError(409, `Too many projects are called ${base}`);
   }
 }
 
@@ -160,6 +207,48 @@ export function parseJsonText(text: string): unknown {
   } catch (e) {
     throw new HttpError(400, `project.json is not valid JSON (${(e as Error).message})`);
   }
+}
+
+function fileSize(file: string): number | null {
+  return fs.statSync(file, { throwIfNoEntry: false })?.size ?? null;
+}
+
+/** Write via a temporary file in the same folder, so `file` is either complete or untouched. */
+function writeAtomic(file: string, bytes: Buffer) {
+  const tmp = path.join(path.dirname(file), `.tmp-${crypto.randomUUID()}`);
+  try {
+    fs.writeFileSync(tmp, bytes);
+    renameWithRetry(tmp, file);
+  } catch (e) {
+    fs.rmSync(tmp, { force: true });
+    throw e;
+  }
+}
+
+function copyAtomic(src: string, dest: string) {
+  const tmp = path.join(path.dirname(dest), `.tmp-${crypto.randomUUID()}`);
+  try {
+    fs.copyFileSync(src, tmp);
+    renameWithRetry(tmp, dest);
+  } catch (e) {
+    fs.rmSync(tmp, { force: true });
+    throw e;
+  }
+}
+
+/** `file` is shorter than `src` and holds exactly its first bytes: a copy that stopped half-way (e.g. disk full). */
+function isTruncatedCopy(file: string, src: string): boolean {
+  const a = fileSize(file);
+  const b = fileSize(src);
+  if (a === null || b === null || a >= b) return false;
+  const head = Buffer.alloc(a);
+  const fd = fs.openSync(src, 'r');
+  try {
+    fs.readSync(fd, head, 0, a, 0);
+  } finally {
+    fs.closeSync(fd);
+  }
+  return head.equals(fs.readFileSync(file));
 }
 
 function toSlashes(p: string): string {

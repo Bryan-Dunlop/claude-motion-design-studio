@@ -106,3 +106,33 @@ test('layers pasted into another project keep an image that only exists in the s
   await toast(page, `Saved ${target}.motion`);
   expect(fs.readFileSync(path.join(WS, `${target}.motion`, rel)).equals(png)).toBe(true);
 });
+
+test('a source file replaced by hand (its bytes no longer match the recorded hash) is pasted under its real hash', async ({ page }) => {
+  const name = `Swapped logo ${Date.now()}`;
+  const recorded = crypto.createHash('sha256').update(`old logo ${name}`).digest('hex');
+  const png = Buffer.concat([fs.readFileSync('tests/fixtures/fixture.png'), Buffer.from(`new logo ${name}`)]);
+  const real = crypto.createHash('sha256').update(png).digest('hex');
+  const rel = `assets/${recorded.slice(0, 8)}-logo.png`;
+  const dir = path.join(WS, `${name}.motion`);
+  fs.mkdirSync(path.join(dir, 'assets'), { recursive: true });
+  fs.writeFileSync(path.join(dir, rel), png);
+  const source = emptyProject();
+  source.assets = [{ id: 'asset_logo', originalName: 'logo.png', relativePath: rel, type: 'image', hash: recorded, width: 64, height: 64 }];
+  source.scenes = [{
+    id: 'scene_a', name: 'Scene 1', start: 0, duration: 5, background: null, transition: { type: 'none', duration: 0.5, direction: 'left', easing: { type: 'easeInOut' } },
+    layers: [{ id: 'layer_logo', name: 'logo', type: 'image', assetId: 'asset_logo', width: 320, height: 320, visible: true, locked: false, start: 0, duration: 5,
+      anchorX: 0.5, anchorY: 0.5, x: 960, y: 540, scale: 1, rotation: 0, opacity: 1, keyframes: {} }],
+  }] as never;
+  fs.writeFileSync(path.join(dir, 'project.json'), JSON.stringify(source));
+
+  await page.goto('/');
+  await page.getByTestId('btn-open').click();
+  await page.getByTestId(`open-${name}`).click();
+  await expect.poll(async () => (await getState(page)).name).toBe(name);
+  await page.getByTestId('layer-item-logo').locator('.name').click();
+  await shortcut(page, 'Control+c');
+  await page.evaluate((p) => (window as any).__motion.useEditor.getState().loadProject(p, null), emptyProject());
+  await shortcut(page, 'Control+v');
+  await expect.poll(async () => (await getState(page)).project.assets.map((a) => a.hash)).toEqual([real]);
+  await expect.poll(async () => (await getState(page)).missing).toEqual([]);
+});

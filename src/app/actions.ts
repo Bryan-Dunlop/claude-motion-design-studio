@@ -353,12 +353,12 @@ export function copySelection(): boolean {
  * the selected scene at the same timing; clips go to the playhead.
  */
 export async function pasteClipboard(opts: { absolute?: boolean } = {}) {
-  const clip = clipboard;
+  let clip = clipboard;
   if (!clip) return S().toast('Nothing to paste yet: select keyframes, layers or audio clips and press Ctrl+C first.');
   if (clip.kind === 'keys') return pasteKeyframes(clip.keys, !opts.absolute);
   const at = S().time;
   const existing = clip.kind === 'layers' ? targetSceneId() : null;
-  if (clip.from && clip.from !== S().projectName) await adoptAssets(clip.from, clip.assets);
+  if (clip.from && clip.from !== S().projectName) clip = { ...clip, assets: await adoptAssets(clip.from, clip.assets) };
   if (clip.kind === 'clips') {
     let ids: string[] = [];
     S().commit((d) => void (ids = pasteClips(d, clip, at, () => makeId('clip'))));
@@ -378,23 +378,25 @@ export async function pasteClipboard(opts: { absolute?: boolean } = {}) {
 
 /**
  * Pasting into another project: files that exist only in the source project's folder (e.g. it was imported from a
- * .zip) are copied byte-for-byte into the workspace store first, so this project finds them and saves them. A file
- * that is gone from the source too is pasted as missing (Relink…).
+ * .zip) are copied byte-for-byte into the workspace store first, so this project finds them and saves them. Returns
+ * the assets as pasted: a file whose bytes no longer match its recorded hash (replaced by hand) is pasted under its
+ * real hash. A file that is gone from the source too is pasted as missing (Relink…).
  */
-async function adoptAssets(from: string, assets: readonly Asset[]) {
-  await Promise.all(
+async function adoptAssets(from: string, assets: readonly Asset[]): Promise<Asset[]> {
+  return Promise.all(
     assets.map(async (a) => {
       try {
-        if ((await fetch(assetUrl(null, a), { method: 'HEAD' })).ok) return; // already in the store
+        if ((await fetch(assetUrl(null, a), { method: 'HEAD' })).ok) return a; // already in the store
         const r = await fetch(assetUrl(from, a));
-        if (!r.ok) return;
-        await api('/api/assets', {
+        if (!r.ok) return a;
+        const { hash } = await api<{ hash: string }>('/api/assets', {
           method: 'POST',
           body: await r.arrayBuffer(),
           headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': encodeURIComponent(a.originalName) },
         });
+        return hash === a.hash ? a : { ...a, hash, relativePath: `assets/${hash.slice(0, 8)}-${safeFileName(a.originalName)}` };
       } catch {
-        /* pasted as missing */
+        return a; // pasted as missing
       }
     }),
   );

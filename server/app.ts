@@ -2,7 +2,7 @@
 // The Vite dev middleware is mounted on the same port so the editor and render page share one origin.
 import fs from 'node:fs';
 import http from 'node:http';
-import type { AddressInfo } from 'node:net';
+import net, { type AddressInfo } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express, { type NextFunction, type Request, type Response } from 'express';
@@ -21,10 +21,33 @@ export interface StartedServer {
   close: () => Promise<void>;
 }
 
+/** Body types a page on another site can send without asking first (no CORS preflight). */
+const SIMPLE_BODY = /^\s*(text\/plain|multipart\/form-data|application\/x-www-form-urlencoded)\b/i;
+
+/**
+ * Is this a request from the editor on this computer? The Host must be this machine (localhost, an IP address — a
+ * DNS-rebinding page has a domain name — or the host the server was started on), and a browser's Origin, when it sends
+ * one, must be this same server.
+ */
+export function isLocalRequest(host: string | undefined, origin: string | undefined, serverHost?: string): boolean {
+  if (!host) return false;
+  const h = host.toLowerCase();
+  const hostname = h.replace(/:\d+$/, '').replace(/^\[(.*)\]$/, '$1');
+  const known = hostname === 'localhost' || net.isIP(hostname) !== 0 || (!!serverHost && hostname === serverHost.toLowerCase());
+  if (!known) return false;
+  if (origin === undefined) return true;
+  try {
+    return new URL(origin).host.toLowerCase() === h;
+  } catch {
+    return false;
+  }
+}
+
 export async function startServer(opts: { port: number; workspace: string; host?: string; hmr?: boolean }): Promise<StartedServer> {
   const ws = new Workspace(opts.workspace);
   const app = express();
-  const raw = express.raw({ type: () => true, limit: '1gb' });
+  // Never the content types another site's page may send without asking first (a CORS "simple" request).
+  const raw = express.raw({ type: (req) => !SIMPLE_BODY.test(String(req.headers['content-type'] ?? '')), limit: '1gb' });
   const json = express.json({ limit: '50mb' });
   let baseUrl = '';
 
@@ -35,6 +58,13 @@ export async function startServer(opts: { port: number; workspace: string; host?
   };
   const param = (req: Request, key: string) => String(req.params[key] ?? '');
 
+  // The API is only for this machine's editor. Like Vite's guard for the editor page: refuse a request that names
+  // another host (a DNS-rebinding page) or comes from another site's page.
+  app.use('/api', (req, res, next) => {
+    if (isLocalRequest(req.headers.host, req.headers.origin, opts.host)) return next();
+    res.status(403).json({ error: 'This server only answers the Motion Studio editor on this computer.' });
+  });
+
   app.get('/api/health', (_req, res) => {
     res.json({ ffmpeg: ffmpegAvailable(), ffmpegHelp: FFMPEG_HELP, workspace: ws.root });
   });
@@ -44,12 +74,12 @@ export async function startServer(opts: { port: number; workspace: string; host?
     res.json(ws.list());
   });
   app.get('/api/projects/:name', wrap((req, res) => {
-    res.json({ name: sanitizeName(param(req, 'name')), project: ws.read(param(req, 'name')) });
+    res.json({ name: ws.projectName(param(req, 'name')), project: ws.read(param(req, 'name')) });
   }));
   /** ?from=<name>: the project it was opened as (Save as…), whose folder holds assets that may not be in scratch. */
   app.put('/api/projects/:name', json, wrap((req, res) => {
     const { project, missing } = ws.save(param(req, 'name'), req.body, req.query.from ? String(req.query.from) : undefined);
-    res.json({ name: sanitizeName(param(req, 'name')), project, missing });
+    res.json({ name: ws.projectName(param(req, 'name')), project, missing });
   }));
 
   // ---------------------------------------------------------------- assets
@@ -84,12 +114,13 @@ export async function startServer(opts: { port: number; workspace: string; host?
   app.post('/api/zip', json, wrap((req, res) => {
     const project = parseProject(req.body.project);
     const name = req.body.name ? String(req.body.name) : '';
-    const dir = name ? ws.projectDir(name) : null;
+    const dir = ws.projectName(name) ? ws.projectDir(name) : null;
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="${sanitizeName(name) || 'project'}.motion.zip"`);
     res.send(ws.zip(project, dir));
   }));
   app.post('/api/import-zip', raw, wrap((req, res) => {
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) throw new HttpError(400, 'Empty upload');
     const filename = decodeURIComponent(String(req.headers['x-filename'] ?? 'Imported.zip'));
     const preferred = filename.replace(/\.zip$/i, '').replace(/\.motion$/i, '');
     res.json(ws.importZip(req.body, preferred));
@@ -102,12 +133,13 @@ export async function startServer(opts: { port: number; workspace: string; host?
     const parsed = parseExportOptions(req.body ?? {});
     if (!parsed.ok) throw new HttpError(400, `Invalid export options: ${parsed.error}`);
     const options = parsed.options;
-    const name = req.body.name ? sanitizeName(String(req.body.name)) : '';
+    const projectName = req.body.name ? String(req.body.name) : '';
+    const name = sanitizeName(projectName);
     const { outW, outH } = exportSize(project.settings, options.scale);
     const now = new Date();
     // Two exports in the same second would otherwise share (and overwrite) one file.
     const outFile = freeOutFile(ws.exports, (n) => exportFileName(name, outW, outH, now, n));
-    const projectDir = name ? ws.projectDir(name) : null;
+    const projectDir = ws.projectName(projectName) ? ws.projectDir(projectName) : null;
     try {
       const job = await startExport({ project, projectDir, outFile, baseUrl, options, resolveAsset: (a) => ws.resolveAsset(projectDir, a) });
       // Failures also go to the server log (the dialog shows them too); cancelling is not a failure.

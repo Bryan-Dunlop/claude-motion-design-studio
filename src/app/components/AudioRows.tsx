@@ -1,13 +1,15 @@
 // Timeline "Audio (n)" block: one row per clip with its waveform. Drag a clip to move it, its left edge to trim the
 // start (start and "skip into file" move together, the end stays), its right edge to change the length. Each drag is
-// one undo step. Clicking a clip selects it (and clears the layer selection).
+// one undo step and snaps (B2) to the playhead, scenes, bars, keyframes, clicks and other clips. Clicking a clip
+// selects it (and clears the layer selection).
 import { useEffect, useRef } from 'react';
 import type { Asset, AudioClip } from '../../shared/schema';
 import { moveClip, trimClipLeft, trimClipRight } from '../audio/clips';
 import { drawWaveform, ensureWaveform, useWaveforms } from '../audio/waveform';
 import { startDrag } from '../drag';
 import { usePrefs } from '../prefs';
-import { snapToFrame, useEditor } from '../store';
+import { useEditor } from '../store';
+import { timeSnapper } from '../timelineSnap';
 
 /** Canvas width cap (device px); longer bars stretch the drawing (peaks are 1/100 s anyway). */
 const MAX_CANVAS = 8192;
@@ -55,12 +57,17 @@ export function AudioRows({ trackW, onScrub }: { trackW: number; onScrub: (e: Re
   const dragClip = (e: React.PointerEvent, clip: AudioClip, mode: 'move' | 'start' | 'end') => {
     e.stopPropagation();
     const ids = pick(e, clip, mode);
-    const origin = new Map(st().project.audio.filter((c) => ids.includes(c.id)).map((c) => [c.id, { ...c }]));
+    const moving = st().project.audio.filter((c) => ids.includes(c.id));
+    const origin = new Map(moving.map((c) => [c.id, { ...c }]));
     const fileLen = assetOf(clip)?.duration;
     const minLen = 1 / fps;
+    const snap = timeSnapper({
+      edges: mode === 'move' ? moving.flatMap((c) => [c.start, c.start + c.duration]) : mode === 'start' ? [clip.start] : [clip.start + clip.duration],
+      exclude: { clipIds: new Set(mode === 'move' ? ids : [clip.id]) },
+    });
     startDrag(e, {
-      onMove: (dx) => {
-        const dt = snapToFrame(dx / zoom, fps);
+      onMove: (dx, _dy, ev) => {
+        const dt = snap.offset(dx / zoom, ev);
         st().updateGesture((d) => {
           for (const c of d.audio) {
             const o = origin.get(c.id);
@@ -70,6 +77,7 @@ export function AudioRows({ trackW, onScrub }: { trackW: number; onScrub: (e: Re
           }
         });
       },
+      onEnd: snap.done,
     });
   };
 

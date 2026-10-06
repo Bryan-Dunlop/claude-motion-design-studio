@@ -2,6 +2,7 @@
 // Sections live in ./props/* so features can be added without editing one giant file.
 import { findLayer, useEditor } from '../store';
 import { AudioClipProps } from './props/AudioClipProps';
+import { KeySelectionSection } from './props/KeySelectionSection';
 import { LayerProps } from './props/LayerProps';
 import { PresetPanel } from './props/PresetPanel';
 import { ProjectSettings } from './props/ProjectSettings';
@@ -22,6 +23,7 @@ export function Properties() {
     return (
       <div className="props">
         <h3>{selected.length} layers selected</h3>
+        <KeySelectionSection />
         <PresetPanel layerIds={selected.map((s) => s.layer.id)} />
         <StaggerPanel layers={selected.map((s) => s.layer)} />
       </div>

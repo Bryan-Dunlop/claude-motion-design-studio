@@ -1,36 +1,64 @@
-import { useRef } from 'react';
-import type { Layer, Scene } from '../../shared/schema';
+import { useRef, useState } from 'react';
+import { propLabel } from '../../shared/propLabels';
+import { ANIMATABLE, type Layer, type Scene } from '../../shared/schema';
 import { startDrag } from '../drag';
+import { clampTimelineHeight, usePrefs } from '../prefs';
 import { snapToFrame, useEditor } from '../store';
+import { timeSnapper, useTimeSnapLine } from '../timelineSnap';
 import { AudioRows } from './AudioRows';
 import { TransitionStrip } from './TransitionStrip';
 
 const LABEL_W = 170;
 
-/** Keyframe times of a layer, grouped per frame, with the props that have a key there. */
-function keyGroups(layer: Layer, fps: number) {
-  const groups = new Map<number, { time: number; props: string[] }>();
+interface KeyGroup {
+  frame: number;
+  /** Layer-local time of the frame. */
+  time: number;
+  ids: string[];
+  props: string[];
+}
+
+/** Keyframes of a layer grouped per frame (the diamonds on the layer's own row), with the props that have a key there. */
+function keyGroups(layer: Layer, fps: number): KeyGroup[] {
+  const groups = new Map<number, KeyGroup>();
   for (const [prop, keys] of Object.entries(layer.keyframes)) {
     for (const k of keys) {
       const f = Math.round(k.time * fps);
-      const g = groups.get(f) ?? { time: f / fps, props: [] };
-      g.props.push(prop);
+      const g = groups.get(f) ?? { frame: f, time: f / fps, ids: [], props: [] };
+      g.ids.push(k.id);
+      if (!g.props.includes(prop)) g.props.push(prop);
       groups.set(f, g);
     }
   }
   return [...groups.values()].sort((a, b) => a.time - b.time);
 }
 
+/** Animated properties in the order the Properties panel lists them. */
+function animatedProps(layer: Layer): string[] {
+  const order = ANIMATABLE[layer.type];
+  const rank = (p: string) => (order.includes(p) ? order.indexOf(p) : order.length);
+  return Object.keys(layer.keyframes)
+    .filter((p) => layer.keyframes[p].length > 0)
+    .sort((a, b) => rank(a) - rank(b));
+}
+
+const labelsOf = (props: string[]) => props.map((p) => propLabel(p).long).join(', ');
+
 export function Timeline() {
   const project = useEditor((s) => s.project);
   const time = useEditor((s) => s.time);
   const zoom = useEditor((s) => s.zoom);
   const selection = useEditor((s) => s.selection);
+  const selectedKeys = useEditor((s) => s.selectedKeys);
+  const snapAt = useTimeSnapLine((s) => s.at);
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const scrollRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   const { durationSec, fps } = project.settings;
   const trackW = Math.max(200, durationSec * zoom);
   const scene: Scene | undefined =
     project.scenes.find((s) => s.id === selection.sceneId) ?? project.scenes.find((s) => time >= s.start && time < s.start + s.duration);
+  const selectedSet = new Set(selectedKeys);
 
   const st = () => useEditor.getState();
   const xToTime = (clientX: number) => {
@@ -45,14 +73,31 @@ export function Timeline() {
     startDrag(e, { history: false, threshold: 0, onMove: (_dx, _dy, ev) => st().setTime(snapToFrame(xToTime(ev.clientX), fps)) });
   };
 
-  // Scene block: body moves, edges trim.
+  // Splitter above the timeline: drag to resize it (remembered).
+  const startResize = (e: React.PointerEvent) => {
+    e.preventDefault();
+    const h0 = rootRef.current!.getBoundingClientRect().height;
+    startDrag(e, {
+      history: false,
+      threshold: 0,
+      onMove: (_dx, dy) => usePrefs.getState().setPref({ timelineHeight: clampTimelineHeight(h0 - dy, window.innerHeight) }),
+    });
+  };
+
+  // Scene block: body moves, edges trim. Its layers move with its start, so they aren't snap targets then.
   const dragScene = (e: React.PointerEvent, s: Scene, mode: 'move' | 'start' | 'end') => {
     e.stopPropagation();
     st().select({ sceneId: s.id, layerIds: [] });
     const { start, duration } = s;
+    const own = new Set(s.layers.map((l) => l.id));
+    const snap = timeSnapper({
+      edges: mode === 'move' ? [start, start + duration] : mode === 'start' ? [start] : [start + duration],
+      sceneId: s.id,
+      exclude: mode === 'end' ? { sceneId: s.id } : { sceneId: s.id, layerBars: own, layerContent: own },
+    });
     startDrag(e, {
-      onMove: (dx) => {
-        const dt = snapToFrame(dx / zoom, fps);
+      onMove: (dx, _dy, ev) => {
+        const dt = snap.offset(dx / zoom, ev);
         st().updateGesture((d) => {
           const sc = d.scenes.find((x) => x.id === s.id)!;
           if (mode === 'move') sc.start = Math.max(0, start + dt);
@@ -64,6 +109,7 @@ export function Timeline() {
           }
         });
       },
+      onEnd: snap.done,
     });
   };
 
@@ -78,13 +124,23 @@ export function Timeline() {
         : [l.id];
     st().select({ sceneId: scene?.id ?? null, layerIds: ids });
     if (l.locked) return;
-    const origin = new Map(scene!.layers.filter((x) => ids.includes(x.id) && !x.locked).map((x) => [x.id, { start: x.start, duration: x.duration }]));
+    const sc = scene!;
+    const moving = sc.layers.filter((x) => ids.includes(x.id) && !x.locked);
+    const origin = new Map(moving.map((x) => [x.id, { start: x.start, duration: x.duration }]));
+    const abs = (x: Layer) => sc.start + x.start;
+    // Keyframes and clicks are layer-relative: they move with a moved bar or a trimmed start.
+    const bars = new Set(mode === 'move' ? moving.map((x) => x.id) : [l.id]);
+    const snap = timeSnapper({
+      edges: mode === 'move' ? moving.flatMap((x) => [abs(x), abs(x) + x.duration]) : mode === 'start' ? [abs(l)] : [abs(l) + l.duration],
+      sceneId: sc.id,
+      exclude: { layerBars: bars, layerContent: mode === 'end' ? undefined : bars },
+    });
     startDrag(e, {
-      onMove: (dx) => {
-        const dt = snapToFrame(dx / zoom, fps);
+      onMove: (dx, _dy, ev) => {
+        const dt = snap.offset(dx / zoom, ev);
         st().updateGesture((d) => {
-          const sc = d.scenes.find((x) => x.id === scene!.id)!;
-          for (const layer of sc.layers) {
+          const dsc = d.scenes.find((x) => x.id === sc.id)!;
+          for (const layer of dsc.layers) {
             const o = origin.get(layer.id);
             if (!o) continue;
             if (mode === 'move') layer.start = Math.max(0, o.start + dt);
@@ -97,31 +153,75 @@ export function Timeline() {
           }
         });
       },
+      onEnd: snap.done,
     });
   };
 
-  const dragKey = (e: React.PointerEvent, l: Layer, g: { time: number; props: string[] }) => {
-    e.stopPropagation();
+  /** Select only these keys (and their layer). */
+  const selectOnly = (l: Layer, ids: string[]) => {
     st().select({ sceneId: scene?.id ?? null, layerIds: [l.id] });
-    st().setTime(scene!.start + l.start + g.time);
+    st().selectKeys(ids);
+  };
+
+  /**
+   * Press on a diamond: `ids` are its keyframes (every key on that frame for the layer row, one key on a property row).
+   * Click selects them (Shift adds; Shift-click on a selected diamond removes it); dragging moves every selected
+   * keyframe by the same amount, snapping the pressed one. The playhead follows the pressed diamond.
+   */
+  const dragKeys = (e: React.PointerEvent, l: Layer, ids: string[], localTime: number) => {
+    e.stopPropagation();
+    const sc = scene!;
+    const before = st().selectedKeys;
+    const wasSelected = ids.every((id) => before.includes(id));
+    if (e.shiftKey) st().selectKeys([...new Set([...before, ...ids])]);
+    else if (!wasSelected) selectOnly(l, ids);
+    const playhead = st().time;
+    st().setTime(sc.start + l.start + localTime);
     if (l.locked) return;
-    const eps = 0.5 / fps;
-    const moving = new Set(Object.values(l.keyframes).flatMap((keys) => keys.filter((k) => Math.abs(k.time - g.time) < eps).map((k) => k.id)));
-    st().selectKeys(e.shiftKey ? [...new Set([...st().selectedKeys, ...moving])] : [...moving]);
+    const moving = new Set(st().selectedKeys);
+    const origin = new Map<string, number>();
+    for (const s of st().project.scenes)
+      for (const layer of s.layers) {
+        if (layer.locked) continue;
+        for (const keys of Object.values(layer.keyframes)) for (const k of keys) if (moving.has(k.id)) origin.set(k.id, k.time);
+      }
+    const snap = timeSnapper({ edges: [sc.start + l.start + localTime], sceneId: sc.id, playhead, anchor: localTime, exclude: { keyIds: new Set(origin.keys()) } });
     startDrag(e, {
-      onMove: (dx) => {
-        const nt = Math.min(Math.max(0, snapToFrame(g.time + dx / zoom, fps)), l.duration);
+      onMove: (dx, _dy, ev) => {
+        const dt = snap.offset(dx / zoom, ev);
         st().updateGesture((d) => {
-          const layer = d.scenes.find((x) => x.id === scene!.id)!.layers.find((x) => x.id === l.id)!;
-          for (const keys of Object.values(layer.keyframes)) {
-            for (const k of keys) if (moving.has(k.id)) k.time = nt;
-            keys.sort((a, b) => a.time - b.time);
-          }
+          for (const s of d.scenes)
+            for (const layer of s.layers)
+              for (const keys of Object.values(layer.keyframes)) {
+                let changed = false;
+                for (const k of keys) {
+                  const o = origin.get(k.id);
+                  if (o === undefined) continue;
+                  k.time = Math.min(Math.max(0, o + dt), layer.duration);
+                  changed = true;
+                }
+                if (changed) keys.sort((a, b) => a.time - b.time);
+              }
         });
-        st().setTime(scene!.start + l.start + nt);
+        st().setTime(sc.start + l.start + Math.min(Math.max(0, localTime + dt), l.duration));
+      },
+      onEnd: (moved) => {
+        snap.done();
+        if (moved) return;
+        // A plain click ends with just this diamond selected; Shift-click on a selected one unselects it.
+        if (!e.shiftKey) selectOnly(l, ids);
+        else if (wasSelected) st().selectKeys(before.filter((id) => !ids.includes(id)));
       },
     });
   };
+
+  const toggleExpanded = (id: string) =>
+    setExpanded((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   const onWheel = (e: React.WheelEvent) => {
     if (!e.ctrlKey && !e.metaKey) return;
@@ -138,7 +238,8 @@ export function Timeline() {
   const layers = scene ? [...scene.layers].reverse() : [];
 
   return (
-    <div className="timeline" onWheel={onWheel}>
+    <div className="timeline" ref={rootRef} onWheel={onWheel}>
+      <div className="tl-splitter" onPointerDown={startResize} title="Drag to make the timeline taller or shorter" data-testid="timeline-splitter" />
       <div className="timeline-scroll" ref={scrollRef}>
         <div className="tl-inner" style={{ width: LABEL_W + trackW + 40 }}>
           <div className="tl-row ruler">
@@ -153,7 +254,7 @@ export function Timeline() {
               ))}
             </div>
           </div>
-          <div className="tl-row scenes-row">
+          <div className="tl-row scenes-row" data-testid="scenes-row">
             <div className="tl-label">Scenes</div>
             <div className="tl-track" style={{ width: trackW }} onPointerDown={scrub}>
               {project.scenes.map((s) => (
@@ -176,58 +277,114 @@ export function Timeline() {
           {layers.map((l) => {
             const sel = selection.layerIds.includes(l.id);
             const abs = scene!.start + l.start;
+            const props = animatedProps(l);
+            const open = props.length > 0 && expanded.has(l.id);
             return (
-              <div className="tl-row" key={l.id}>
-                <div className={`tl-label ${sel ? 'sel' : ''}`} onPointerDown={() => st().select({ sceneId: scene!.id, layerIds: [l.id] })}>
-                  {l.name}
-                </div>
-                <div className="tl-track" style={{ width: trackW }} onPointerDown={scrub}>
-                  <div
-                    className={`layer-bar ${sel ? 'sel' : ''} ${l.visible ? '' : 'hidden'} ${l.locked ? 'locked' : ''}`}
-                    style={{ left: abs * zoom, width: Math.max(4, l.duration * zoom) }}
-                    onPointerDown={(e) => dragLayer(e, l, 'move')}
-                    title={`${l.name}: drag to move in time, drag edges to trim`}
-                    data-testid={`layer-bar-${l.name}`}
-                  >
-                    <div className="edge left" onPointerDown={(e) => dragLayer(e, l, 'start')} />
-                    <div className="edge right" onPointerDown={(e) => dragLayer(e, l, 'end')} />
+              <div className="tl-layer" key={l.id}>
+                <div className="tl-row">
+                  <div className={`tl-label ${sel ? 'sel' : ''}`} onPointerDown={() => st().select({ sceneId: scene!.id, layerIds: [l.id] })}>
+                    {props.length > 0 ? (
+                      <button
+                        className="tl-expand"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={() => toggleExpanded(l.id)}
+                        title={open ? 'Hide the keyframe rows' : 'Show one row per animated property'}
+                        data-testid={`tl-expand-${l.name}`}
+                        aria-expanded={open}
+                      >
+                        {open ? '▾' : '▸'}
+                      </button>
+                    ) : (
+                      <span className="tl-expand-space" />
+                    )}
+                    {l.name}
                   </div>
-                  {l.type === 'cursor' &&
-                    l.clicks
-                      // Same rule as the click sounds (audioPlan): only clicks inside the layer and its scene happen.
-                      .filter((c) => c.time < l.duration && l.start + c.time < scene!.duration)
-                      .map((c, i) => (
-                        <div
-                          key={c.id}
-                          className={`click-marker ${l.clickSound ? 'sound' : ''}`}
-                          style={{ left: (abs + c.time) * zoom }}
-                          onPointerDown={(e) => {
-                            e.stopPropagation();
-                            st().select({ sceneId: scene!.id, layerIds: [l.id] });
-                            st().setTime(abs + c.time);
-                          }}
-                          title={`Click at ${(abs + c.time).toFixed(2)}s${l.clickSound ? ' — plays the click sound' : ''}. Edit clicks in the Cursor panel.`}
-                          data-testid={`click-marker-${l.name}-${i}`}
-                        >
-                          ●
-                        </div>
-                      ))}
-                  {keyGroups(l, fps).map((g) => (
+                  <div className="tl-track" style={{ width: trackW }} onPointerDown={scrub}>
                     <div
-                      key={g.time}
-                      className="diamond"
-                      style={{ left: (abs + g.time) * zoom }}
-                      onPointerDown={(e) => dragKey(e, l, g)}
-                      title={`Keyframe at ${g.time.toFixed(2)}s (${g.props.join(', ')}). Drag to retime.`}
-                      data-testid={`kf-${l.name}-${Math.round(g.time * fps)}`}
-                    />
-                  ))}
+                      className={`layer-bar ${sel ? 'sel' : ''} ${l.visible ? '' : 'hidden'} ${l.locked ? 'locked' : ''}`}
+                      style={{ left: abs * zoom, width: Math.max(4, l.duration * zoom) }}
+                      onPointerDown={(e) => dragLayer(e, l, 'move')}
+                      title={`${l.name}: drag to move in time, drag edges to trim`}
+                      data-testid={`layer-bar-${l.name}`}
+                    >
+                      <div className="edge left" onPointerDown={(e) => dragLayer(e, l, 'start')} />
+                      <div className="edge right" onPointerDown={(e) => dragLayer(e, l, 'end')} />
+                    </div>
+                    {l.type === 'cursor' &&
+                      l.clicks
+                        // Same rule as the click sounds (audioPlan): only clicks inside the layer and its scene happen.
+                        .filter((c) => c.time < l.duration && l.start + c.time < scene!.duration)
+                        .map((c, i) => (
+                          <div
+                            key={c.id}
+                            className={`click-marker ${l.clickSound ? 'sound' : ''}`}
+                            style={{ left: (abs + c.time) * zoom }}
+                            onPointerDown={(e) => {
+                              e.stopPropagation();
+                              st().select({ sceneId: scene!.id, layerIds: [l.id] });
+                              st().setTime(abs + c.time);
+                            }}
+                            title={`Click at ${(abs + c.time).toFixed(2)}s${l.clickSound ? ' — plays the click sound' : ''}. Edit clicks in the Cursor panel.`}
+                            data-testid={`click-marker-${l.name}-${i}`}
+                          >
+                            ●
+                          </div>
+                        ))}
+                    {keyGroups(l, fps).map((g) => {
+                      const n = g.ids.filter((id) => selectedSet.has(id)).length;
+                      return (
+                        <div
+                          key={g.frame}
+                          className={`diamond ${n === g.ids.length ? 'sel' : n > 0 ? 'part' : ''}`}
+                          style={{ left: (abs + g.time) * zoom }}
+                          onPointerDown={(e) => dragKeys(e, l, g.ids, g.time)}
+                          title={`Keyframe at ${(abs + g.time).toFixed(2)}s (${labelsOf(g.props)}). Click to select (Shift adds), drag to move in time.`}
+                          data-testid={`kf-${l.name}-${g.frame}`}
+                          data-selected={n === g.ids.length ? 'yes' : n > 0 ? 'part' : 'no'}
+                        />
+                      );
+                    })}
+                  </div>
                 </div>
+                {open &&
+                  props.map((prop) => (
+                    <div className="tl-row prop-row" key={prop} data-testid={`kf-row-${l.name}-${prop}`}>
+                      <div
+                        className={`tl-label prop-label ${sel ? 'sel' : ''}`}
+                        onPointerDown={(e) => {
+                          const ids = l.keyframes[prop].map((k) => k.id);
+                          if (e.shiftKey) st().selectKeys([...new Set([...st().selectedKeys, ...ids])]);
+                          else selectOnly(l, ids);
+                        }}
+                        title={`${propLabel(prop).tip} Click to select all its keyframes (Shift adds).`}
+                        data-testid={`kf-row-label-${l.name}-${prop}`}
+                      >
+                        {propLabel(prop).long}
+                      </div>
+                      <div className="tl-track" style={{ width: trackW }} onPointerDown={scrub}>
+                        {l.keyframes[prop].map((k) => {
+                          const on = selectedSet.has(k.id);
+                          return (
+                            <div
+                              key={k.id}
+                              className={`diamond small ${on ? 'sel' : ''}`}
+                              style={{ left: (abs + k.time) * zoom }}
+                              onPointerDown={(e) => dragKeys(e, l, [k.id], k.time)}
+                              title={`${propLabel(prop).long} keyframe at ${(abs + k.time).toFixed(2)}s: ${typeof k.value === 'number' ? Math.round(k.value * 100) / 100 : k.value}. Click to select (Shift adds), drag to move just this one.`}
+                              data-testid={`kf-${l.name}-${prop}-${Math.round(k.time * fps)}`}
+                              data-selected={on ? 'yes' : 'no'}
+                            />
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
               </div>
             );
           })}
           <AudioRows trackW={trackW} onScrub={scrub} />
           <div className="playhead" style={{ left: LABEL_W + time * zoom }} />
+          {snapAt !== null && <div className="tl-snap-line" style={{ left: LABEL_W + snapAt * zoom }} data-testid="tl-snap-line" />}
         </div>
       </div>
       <div className="tl-footer">

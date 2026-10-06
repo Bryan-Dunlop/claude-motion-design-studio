@@ -161,3 +161,159 @@ Playwright:
 - Preview sound starts when the browser allows it (after a click or key press on the page — always the case when you
   press Play).
 - The "missing asset" WAV case is its own test in `app-audio.spec.ts` (not added to `editor.spec.ts`).
+
+## B2. Timeline & preview UX
+
+### What the user gets
+
+- **Selecting keyframes**: click a ◆ diamond in the timeline to select it (on a layer's own row a diamond stands for
+  every keyframe at that time); **Shift-click adds** it, Shift-click on a selected one takes it out again. Adding a
+  keyframe with ◆ in the Properties panel selects it too. Selected diamonds are drawn white with a blue ring (half white
+  when only some of the keys at that time are selected). The playhead jumps to the diamond you press; its tooltip
+  gives the time on the ruler and the properties.
+- **Keyframe panel** (pinned under the layer name): `Keyframe easing (n selected)` with the easing picker for all
+  selected keyframes (one undo step), the properties they belong to in plain words ("X position, Opacity"), a hint
+  "Reuse this motion: Ctrl+C, select another layer, Ctrl+V." and a `Delete keyframe` / `Delete n keyframes` button. It
+  also shows when the selected keyframes are on several layers.
+- **Moving keyframes**: drag a diamond to move it in time; dragging a diamond that is part of the selection moves the
+  whole selection by the same amount (each key stays inside its layer). One drag = one undo step.
+- **Keyframe rows**: a `▸` in front of an animated layer's name in the timeline opens one row per animated property,
+  named like everywhere else in the app (`X position`, `Opacity`, `Trim end`, `Shadow softness`…, in Properties
+  order). Dragging a diamond there moves only that keyframe; clicking a row's name selects all its keyframes (Shift
+  adds).
+- **Keyboard** (never while typing in a field; a focused checkbox still toggles with Space):
+  - `Delete` / `Backspace`: the selected keyframes if any (the layer stays), else the selected audio clips, else the
+    selected layers. A property whose last keyframe is deleted keeps its normal (static) value.
+  - `Esc`: first clears the keyframe selection, then the clip / layer selection. An open menu takes the `Esc` itself.
+  - `Ctrl+C`: copies the selected keyframes if any, else the selected audio clips, else the selected layers (a toast
+    confirms). `Ctrl+V` pastes:
+    - **keyframes** onto every selected layer at the playhead (the first copied key lands on the playhead, the rest
+      keep their spacing, clamped to the layer). X/Y are **relative**: the motion starts from where each layer is now
+      (copy a "move 400 px right" and it moves that layer 400 px right from its own position); other properties paste
+      as they were. Properties the layer can't animate are skipped and the toast says so:
+      `Pasted 6 keyframes (2 skipped: not available on text)`. If the playhead is outside a layer, nothing is pasted
+      there: `Move the playhead inside "Text" to paste keyframes there.` A keyframe already on the same frame is
+      replaced. `Ctrl+Shift+V` pastes the exact copied values instead. The pasted keyframes become the selection.
+    - **layers** into the selected scene at the same timing inside the scene (new copies; a name already used in that
+      scene gets " copy"); the pasted layers become the selection. Their images, fonts and click sounds come along.
+    - **audio clips** at the playhead (earliest one there, the rest keep their spacing).
+    Everything pasted is one undo step. Copying works across projects (the clipboard lives until the page is closed).
+  - `Ctrl+D`: duplicates the selected layers, else the selected clips (unchanged from B1).
+- **Snapping while moving layers in the preview** (`Snap` button, on by default): the selection's left / centre /
+  right and top / middle / bottom snap to the frame edges and centre, to the other visible layers' edges and centres,
+  and (with Guides on) to the safe box, within 8 screen pixels. Magenta lines show what it snapped to. Hold
+  `Ctrl` (`⌘` on a Mac) to move freely. With Shift (move along one axis only) the locked axis never snaps.
+- **Snapping in the timeline**: dragging a layer bar (move or either edge), a scene block (move or either edge), an
+  audio clip (move or either edge) or keyframes snaps to the playhead, the project start/end, scene boundaries, the
+  other bars and clips, keyframes and cursor clicks within 8 pixels; a magenta line shows the snap. `Ctrl`/`⌘` or Snap
+  off: whole frames only. (A keyframe drag snaps to where the playhead was before you pressed the diamond.)
+- **Guides** button: centre lines, rule-of-thirds lines and one safe box over the preview (never in the export). For
+  9:16 the box is the area Reels/TikTok leave free of their buttons and captions (6% sides, 14% top, 35% bottom; the
+  covered part is hatched; label `Reels/TikTok UI`), for every other format a 90% `Title safe` box.
+- **Marquee**: drag on empty preview space (also the grey area around the frame) to select every unlocked layer the
+  rectangle touches (live while dragging); Shift adds to the selection. A plain click on empty space clears the
+  selection as before.
+- **Easier clicking**: layers are hit within 6 screen pixels around their outline, at any zoom; a line is hit near
+  the line itself (half its stroke or 6 screen pixels), not anywhere in its box.
+- **Playback bar**: `⟳ Loop`, `Snap`, `Guides`, `🔊 Sound` — Snap and Guides are remembered between sessions.
+- **Bigger timeline when you need it**: drag the line between the preview and the timeline (default 240 px, at least
+  160 px, at most 60% of the window; remembered). Toasts move up with it. The ruler and the Scenes row stay at the top
+  while you scroll through many layers.
+- **Menus**: `+ Shape ▾`, `More ▾` and a new `File ▾` (with `Export .zip` and `Import .zip`, which used to be two
+  toolbar buttons) close when you pick an item, click anywhere else or press Esc; opening one closes the other.
+- **No accidental text selection**: Shift-clicking diamonds, bars or list rows no longer selects page text (which
+  used to make the next drag start a browser text-drag and cancel it).
+
+### How it works (for maintainers)
+
+- `src/app/snapping.ts` (pure): `snapAxis` (closest moving position → target within a threshold), `snapMove`
+  (selection bounds, per-axis snapping, Shift locks, guide lines = targets the snapped edges touch), `moveTargets`,
+  `safeArea` / `isVertical916` / `guideLines`, hit-testing (`hitPolygon` = inside or within `pad` of the outline,
+  `distToSegment`), marquee overlap (`polygonIntersectsBox`, separating-axis test on the real rotated outline) and
+  `timelineTargets(project, {playhead, sceneId, exclude})`. `SNAP_PX = 8`.
+- `src/app/timelineSnap.ts`: `timeSnapper({edges, exclude, sceneId?, playhead?, anchor?})` for one timeline drag
+  (snapped offset or whole frames) + `useTimeSnapLine` for the magenta line. Used by Timeline.tsx and AudioRows.tsx.
+  What moves with a drag is excluded (a moved bar's keys/clicks, a scene's layers when its start moves, the dragged
+  keys / clips).
+- `src/app/clipboard.ts` (pure, unit-tested): `copyKeys` (absolute times, `structuredClone`d), `copyLayers` /
+  `copyClips` (+ the assets they use), `pasteKeys(draft, targets, keys, time, {relative, newId})` → `{ids, skipped,
+  skippedTypes, refused}`, `pasteKeysMessage`, `pasteLayers` (via `deepCloneLayer`), `pasteClips`.
+- `actions.ts`: `deleteKeys`, `copySelection`, `pasteClipboard({absolute})` (in-memory clipboard; each paste is one
+  `commit` and then selects what was pasted).
+- `components/Menu.tsx`: `Menu` / `MenuItem` and `useDismiss(active, ref, onDismiss)` (window pointerdown + Escape in
+  the capture phase; Escape is consumed).
+- `prefs.ts`: `snap` (true), `guides` (false), `timelineHeight` (240) + `clampTimelineHeight`.
+- Preview: the pointer handler sits on the whole preview area (so the marquee can start outside the frame); handles
+  stop propagation as before.
+
+### Tests
+
+Unit (vitest):
+- `tests/unit/app-snapping.test.ts` — `snapAxis` (closest pair, threshold inclusive, ties), move targets, centre lands
+  exactly on the frame centre (with guides), edges onto frame edges and another layer's edge, no snap outside the
+  threshold, Shift-locked axis, 9:16 Reels box (6/14/35%) vs 90% title-safe for 16:9, 1:1, 4:5, 16:10, centre/thirds,
+  point-in-polygon / pad / segment distance, marquee overlap with a rotated outline, timeline targets (playhead,
+  project, scenes, bars, keys, clicks inside the layer only, clips) and exclusions.
+- `tests/unit/app-clipboard.test.ts` — copy keeps absolute times / easing / preset tag as unfrozen clones; relative
+  x/y paste from the target's animated value; absolute paste; same-frame replacement; several targets with skipped
+  properties and the toast text; clamping to the layer; refusal when the playhead is outside; two keys clamped onto one
+  frame; layer paste (scene-relative timing, new ids incl. keys/points/clicks, " copy" names, assets carried into
+  another project); clip paste at the playhead.
+- `tests/unit/app-prefs.test.ts` — Snap on / Guides off / 240 px by default; the splitter clamp (160 px … 60% of the
+  window, the minimum wins in a tiny window).
+
+Playwright:
+- `tests/e2e/app-keyframes.spec.ts`
+  - "select diamonds (Shift adds)…" — ◆ selects, click / Shift-click / Shift-click again, `Keyframe easing (n
+    selected)`, one easing change for 4 keys = 1 undo step, **select a diamond + Delete keeps the layer** (1 step),
+    undo restores unselected keys, the panel's Delete button, Backspace, then Delete removes the layer, Esc order
+    (keys, then layers), undo drops a selected key from the selection.
+  - "▸ shows one row per animated property…" — labels `X position`, `Opacity`, `Trim end`, `Shadow softness`;
+    dragging the x diamond on its row moves only that key (opacity's key at the same time stays; 1 undo step);
+    dragging a selected diamond moves the whole selection; clicking a row label selects its keys (Shift adds).
+  - "Ctrl+C / Ctrl+V keyframes…" — 6 keys copied; **relative x/y paste** onto a text at 2 s (1920→2320 becomes
+    1000→1400, 1080→1280 becomes 500→700), selected, 1 undo step; `Ctrl+Shift+V` absolute; paste onto text + cursor:
+    `Pasted 8 keyframes (4 skipped: not available on cursor)` and the 8-key multi-layer panel; playhead outside the
+    layer → refusal toast and no undo step.
+  - "Ctrl+C / Ctrl+V layers…" — Esc first so Ctrl+C takes the layer, paste into Scene 2 at the same start (new ids),
+    second paste → `Rectangle copy`, Ctrl+D with a key selected duplicates the layer, empty clipboard toast.
+- `tests/e2e/app-snapping.spec.ts`
+  - "preview move: … exact frame centre…" — Ctrl-drag moves freely; a drag ending 3/2 screen px off the centre lands on
+    **exactly (1920, 1080)** with magenta guides at 1920/1080 while dragging (1 undo step); **Ctrl disables** it; Snap
+    off disables it; Snap is on by default and remembered.
+  - "…edges to other layers and to the frame edges" — ellipse's left edge onto the rectangle's right edge (2244, guide
+    shown), rectangle's left edge onto x = 0.
+  - "Guides…" — 16:9 title-safe box 192/108/3456/1944, 2 centre + 4 thirds lines, not drawn into the canvas; 9:16 →
+    Reels/TikTok box (129.6/537.6/1900.8/1958.4) and a move snapping to its edge; remembered.
+  - "marquee…" — live selection while dragging, Shift adds, click on empty space clears, locked layers skipped, a line
+    is hit ~17 px from its segment but not ~38 px away inside its box.
+  - "timeline: keyframes and layer bars snap to the playhead…" — key lands on 2 s with the magenta line at 2 s, bar
+    start onto 3 s, Ctrl → 2 frames, Snap off → 4 frames.
+  - "timeline: a scene edge snaps to a layer bar end, a sound clip to a cursor click" — scene end → 10 s, clip start →
+    1.4 s.
+- `tests/e2e/app-layout.spec.ts`
+  - "menus close on an outside click and on Escape…" — + Shape ▾ closes on outside pointerdown, on Escape (the
+    selection survives that Escape), after picking Star, on a second click, when File ▾ opens; File ▾ items; More ▾
+    items disabled.
+  - "the timeline splitter…" — 240 → 340 px (the preview shrinks), clamped at 160 and 570 (60% of 950), toasts at
+    580 px, remembered after reload; with 25 layers scrolled down the ruler and the Scenes row stay at the top.
+  - "a focused checkbox keeps Space…" — Space toggles the focused Mute box (no playback), Delete still deletes the clip.
+- `tests/e2e/ui-export-zip.spec.ts` (edited): Export .zip and Import .zip now go through `File ▾` (the menu closes after
+  the pick; Import opens the `.zip` file chooser).
+
+### Measured
+
+- Snap distance: 8 screen px. In the default 1500×950 test window a 4K 16:9 preview is 908 px wide, so 8 px = 33.8
+  project px; a 9:16 4K preview is 336 px wide (8 px = 51 project px). In the timeline at the default zoom (60 px/s)
+  8 px = 0.133 s (4 frames at 30 fps).
+- Snapped positions are exact: centre 1920.000/1080.000, edge 2244 → x = 2568, frame edge → x = 324, Reels box edge
+  129.6 → x = 453.6; timeline snaps land exactly on 2 s, 3 s, 10 s and 1.4 s.
+- The three B2 spec files (13 tests) run in about 15 s; the whole e2e suite (41 tests) in about 1.1 min.
+
+### Not done / limitations
+
+- Timeline rows are labelled with the shared table's long names (`X position`, `Shadow softness`) — the spec's
+  examples said `X` / `Shadow blur`; the table (src/shared/propLabels.ts) is the single source, so it wins.
+- Line hit-testing uses `strokeWidth × |scale| / 2` (the spec wrote `strokeWidth/2`; same at scale 1).
+- Menus have no arrow-key navigation (Tab + Enter work).
+- Copy/paste is in-memory (not the system clipboard), so it doesn't work between two browser tabs.

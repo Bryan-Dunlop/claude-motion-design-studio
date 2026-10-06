@@ -7,6 +7,7 @@ import { safeFileName } from '../shared/names';
 import { ASPECTS, emptyProject, ProjectSchema, type Asset, type AudioClip, type Layer, type Project, type Scene, type Settings, type ShapeKind } from '../shared/schema';
 import { clockLabel, duplicateClipsAt, newClip } from './audio/clips';
 import { loadAudioInfo } from './audio/waveform';
+import { copyClips, copyKeys, copyLayers, pasteClips, pasteKeys, pasteKeysMessage, pasteLayers, type Clipboard, type CopiedKey, type PasteKeysResult } from './clipboard';
 import { deepCloneLayer, findLayer, useEditor } from './store';
 
 const S = () => useEditor.getState();
@@ -265,6 +266,88 @@ export function moveLayer(id: string, delta: -1 | 1) {
   S().commit((d) => {
     for (const s of d.scenes) moveInArray(s.layers, (l) => l.id === id, delta);
   });
+}
+
+// ---------------------------------------------------------------- keyframes
+
+/** Delete keyframes (one undo step); the layers stay. A property left without keyframes keeps its static value. */
+export function deleteKeys(ids: readonly string[]) {
+  if (!ids.length) return;
+  const gone = new Set(ids);
+  S().commit((d) => {
+    for (const scene of d.scenes)
+      for (const layer of scene.layers)
+        for (const [prop, keys] of Object.entries(layer.keyframes)) {
+          if (!keys.some((k) => gone.has(k.id))) continue;
+          const kept = keys.filter((k) => !gone.has(k.id));
+          if (kept.length) layer.keyframes[prop] = kept;
+          else delete layer.keyframes[prop];
+        }
+  });
+  S().selectKeys([]);
+}
+
+// ---------------------------------------------------------------- clipboard (Ctrl+C / Ctrl+V)
+
+/** In-memory clipboard (plain cloned data; survives opening another project). */
+let clipboard: Clipboard | null = null;
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+/** Ctrl+C: the selected keyframes if there are any, else the selected audio clips, else the selected layers. */
+export function copySelection(): boolean {
+  const { project, selection, selectedKeys } = S();
+  if (selectedKeys.length) {
+    const keys = copyKeys(project, selectedKeys);
+    clipboard = { kind: 'keys', keys };
+    S().toast(`Copied ${plural(keys.length, 'keyframe')}. Select a layer and press Ctrl+V to paste them at the playhead.`);
+  } else if (selection.audioIds.length) {
+    const clip = copyClips(project, selection.audioIds);
+    clipboard = clip;
+    S().toast(`Copied ${plural(clip.clips.length, 'audio clip')}. Ctrl+V pastes at the playhead.`);
+  } else if (selection.layerIds.length) {
+    const clip = copyLayers(project, selection.layerIds);
+    clipboard = clip;
+    S().toast(`Copied ${plural(clip.layers.length, 'layer')}. Ctrl+V pastes into the selected scene.`);
+  } else return false;
+  return true;
+}
+
+/**
+ * Ctrl+V: paste what was copied, as one undo step, and select it. Keyframes go onto every selected layer at the
+ * playhead (x/y relative to where each layer is; `absolute` = Ctrl+Shift+V keeps the copied values); layers go into
+ * the selected scene at the same timing; clips go to the playhead.
+ */
+export function pasteClipboard(opts: { absolute?: boolean } = {}) {
+  const clip = clipboard;
+  if (!clip) return S().toast('Nothing to paste yet: select keyframes, layers or audio clips and press Ctrl+C first.');
+  if (clip.kind === 'keys') return pasteKeyframes(clip.keys, !opts.absolute);
+  if (clip.kind === 'clips') {
+    let ids: string[] = [];
+    const at = S().time;
+    S().commit((d) => void (ids = pasteClips(d, clip, at, () => makeId('clip'))));
+    S().select({ audioIds: ids });
+    return;
+  }
+  const existing = targetSceneId();
+  const created = existing ? null : newScene(S().project);
+  const sceneId = existing ?? created!.id;
+  let ids: string[] = [];
+  S().commit((d) => {
+    if (created) d.scenes.push(created);
+    ids = pasteLayers(d, sceneId, clip);
+  });
+  S().select({ sceneId, layerIds: ids, audioIds: [] });
+  if (created) showScene(created);
+}
+
+function pasteKeyframes(keys: CopiedKey[], relative: boolean) {
+  const { selection, time } = S();
+  if (!selection.layerIds.length) return S().toast('Select the layer(s) to paste the keyframes onto.');
+  let r: PasteKeysResult = { ids: [], skipped: 0, skippedTypes: [], refused: [] };
+  S().commit((d) => void (r = pasteKeys(d, selection.layerIds, keys, time, { relative, newId: () => makeId('kf') })));
+  if (r.ids.length) S().selectKeys(r.ids);
+  S().toast(pasteKeysMessage(r), r.ids.length ? 'info' : 'error');
 }
 
 // ---------------------------------------------------------------- settings

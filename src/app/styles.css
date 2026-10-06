@@ -166,3 +166,24 @@ pre { white-space: pre-wrap; margin: 0; }
 .section-badge { margin-left: 6px; color: var(--key); }
 .kf-pair { display: flex; gap: 3px; align-items: center; }
 .kf-pair .num { min-width: 0; flex: 1; }
+
+/* ---- audio (B1) */
+.audio-head .tl-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; user-select: none; }
+.audio-head .tl-label:hover { color: var(--text); }
+.audio-row { height: 34px; }
+.audio-row .tl-label { font-size: 12px; }
+.clip-icon { color: #7fc8ff; }
+.clip-bar { position: absolute; top: 3px; bottom: 3px; border-radius: 5px; cursor: grab; overflow: hidden; background: #1f4152; border: 1px solid #2f6a85; }
+.clip-bar.sel { background: #255a73; border-color: #8fd3ff; }
+.clip-bar.muted { opacity: 0.45; }
+.clip-bar.missing { border-style: dashed; border-color: var(--danger); }
+.clip-bar .waveform { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.clip-bar .clip-name { position: absolute; left: 6px; top: 1px; font-size: 10px; color: #d8f0ff; text-shadow: 0 1px 2px #000; pointer-events: none; white-space: nowrap; }
+.clip-summary { position: absolute; top: 9px; height: 8px; border-radius: 3px; background: #2f6a85; pointer-events: none; }
+.clip-summary.muted { opacity: 0.45; }
+.click-marker { position: absolute; top: 50%; transform: translate(-50%, -50%); font-size: 10px; line-height: 1; color: #fff; text-shadow: 0 0 2px #000; cursor: pointer; z-index: 2; }
+.click-marker.sound { color: #7fc8ff; }
+.add-at-playhead { padding: 1px 6px; font-size: 11px; }
+.export-warnings { margin: 6px 0; padding-left: 18px; }
+.audio-props .row { grid-template-columns: 20px 112px 1fr; }
+.audio-props .row-ctl input[type='checkbox'] { flex: none; }

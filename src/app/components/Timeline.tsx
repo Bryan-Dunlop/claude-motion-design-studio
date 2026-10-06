@@ -2,6 +2,7 @@ import { useRef } from 'react';
 import type { Layer, Scene } from '../../shared/schema';
 import { startDrag } from '../drag';
 import { snapToFrame, useEditor } from '../store';
+import { AudioRows } from './AudioRows';
 import { TransitionStrip } from './TransitionStrip';
 
 const LABEL_W = 170;
@@ -191,6 +192,26 @@ export function Timeline() {
                     <div className="edge left" onPointerDown={(e) => dragLayer(e, l, 'start')} />
                     <div className="edge right" onPointerDown={(e) => dragLayer(e, l, 'end')} />
                   </div>
+                  {l.type === 'cursor' &&
+                    l.clicks
+                      // Same rule as the click sounds (audioPlan): only clicks inside the layer and its scene happen.
+                      .filter((c) => c.time < l.duration && l.start + c.time < scene!.duration)
+                      .map((c, i) => (
+                        <div
+                          key={c.id}
+                          className={`click-marker ${l.clickSound ? 'sound' : ''}`}
+                          style={{ left: (abs + c.time) * zoom }}
+                          onPointerDown={(e) => {
+                            e.stopPropagation();
+                            st().select({ sceneId: scene!.id, layerIds: [l.id] });
+                            st().setTime(abs + c.time);
+                          }}
+                          title={`Click at ${(abs + c.time).toFixed(2)}s${l.clickSound ? ' — plays the click sound' : ''}. Edit clicks in the Cursor panel.`}
+                          data-testid={`click-marker-${l.name}-${i}`}
+                        >
+                          ●
+                        </div>
+                      ))}
                   {keyGroups(l, fps).map((g) => (
                     <div
                       key={g.time}
@@ -205,6 +226,7 @@ export function Timeline() {
               </div>
             );
           })}
+          <AudioRows trackW={trackW} onScrub={scrub} />
           <div className="playhead" style={{ left: LABEL_W + time * zoom }} />
         </div>
       </div>

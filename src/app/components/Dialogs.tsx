@@ -91,6 +91,8 @@ interface Job {
   frame: number;
   total: number;
   error?: string;
+  /** Problems that didn't stop the export (e.g. a missing audio file). */
+  warnings?: string[];
   outFile: string;
 }
 
@@ -169,6 +171,13 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
             {job.status} — frame {job.frame}/{job.total} ({pct}%)
           </p>
           {job.error && <pre className="warn">{job.error}</pre>}
+          {!!job.warnings?.length && (
+            <ul className="warn export-warnings" data-testid="export-warnings">
+              {job.warnings.map((w) => (
+                <li key={w}>{w}</li>
+              ))}
+            </ul>
+          )}
           {job.status === 'done' && (
             <p>
               Saved to <code>{job.outFile}</code>

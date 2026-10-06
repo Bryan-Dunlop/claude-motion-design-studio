@@ -5,7 +5,9 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import type { Browser } from 'playwright';
 import { frameCount } from '../src/shared/renderFrame';
-import type { Project } from '../src/shared/schema';
+import type { Asset, Project } from '../src/shared/schema';
+import { buildAudioArgs, type AudioArgs } from './audioMix';
+import { safeJoin } from './projects';
 
 export type JobStatus = 'starting' | 'rendering' | 'encoding' | 'done' | 'error' | 'cancelled';
 
@@ -18,7 +20,11 @@ export interface ExportJob {
   frame: number;
   total: number;
   error?: string;
+  /** Problems that didn't stop the export (e.g. a missing audio file); shown in the export dialog. */
+  warnings: string[];
   ffmpeg?: ChildProcessWithoutNullStreams;
+  /** Kills ffmpeg if it doesn't exit after its input ended (see finishFrames). */
+  watchdog?: ReturnType<typeof setTimeout>;
   browser?: Browser;
   finished: Promise<void>;
   /** Internal: called by the frame endpoint / page. */
@@ -44,24 +50,48 @@ export function ffmpegAvailable(): boolean {
 const jobs = new Map<string, ExportJob>();
 export const getJob = (id: string) => jobs.get(id);
 
-export function ffmpegArgs(project: Project, outFile: string): string[] {
+const NO_AUDIO: AudioArgs = { inputs: [], filter: [], codec: [], warnings: [] };
+
+/** Full ffmpeg command: raw RGBA frames on stdin (input 0), plus the audio inputs and mix from buildAudioArgs. */
+export function ffmpegArgs(project: Project, outFile: string, audio: AudioArgs = NO_AUDIO): string[] {
   const { width, height, fps } = project.settings;
   return [
     '-y', '-loglevel', 'error',
     '-f', 'rawvideo', '-pix_fmt', 'rgba', '-s', `${width}x${height}`, '-r', String(fps), '-i', '-',
+    ...audio.inputs,
+    ...audio.filter,
     '-vf', 'scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int+full_chroma_inp,format=yuv420p',
     '-c:v', 'libx264', '-preset', 'medium', '-crf', '16', '-pix_fmt', 'yuv420p',
     '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709',
+    ...audio.codec,
     '-movflags', '+faststart',
     outFile,
   ];
+}
+
+/** An asset's file inside the project folder (used when the caller doesn't pass a resolver). */
+function fileInProject(projectDir: string | null, asset: Asset): string | null {
+  if (!projectDir) return null;
+  try {
+    const file = safeJoin(projectDir, asset.relativePath);
+    return fs.existsSync(file) ? file : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
  * Start an export. `baseUrl` is the running server (which serves render.html).
  * Resolves the job object immediately; await job.finished for completion.
  */
-export async function startExport(opts: { project: Project; projectDir: string | null; outFile: string; baseUrl: string }): Promise<ExportJob> {
+export async function startExport(opts: {
+  project: Project;
+  projectDir: string | null;
+  outFile: string;
+  baseUrl: string;
+  /** Where an asset's bytes are on disk (project folder, then the scratch store); null when missing. */
+  resolveAsset?: (asset: Asset) => string | null;
+}): Promise<ExportJob> {
   if (!ffmpegAvailable()) throw Object.assign(new Error(FFMPEG_HELP), { status: 424 });
   let resolve!: () => void;
   let reject!: (e: Error) => void;
@@ -78,18 +108,22 @@ export async function startExport(opts: { project: Project; projectDir: string |
     status: 'starting',
     frame: 0,
     total: frameCount(opts.project),
+    warnings: [],
     finished,
     resolve,
     reject,
   };
   jobs.set(job.id, job);
 
-  const ff = spawn(process.env.FFMPEG_PATH || 'ffmpeg', ffmpegArgs(opts.project, opts.outFile));
+  const audio = buildAudioArgs(opts.project, opts.resolveAsset ?? ((a) => fileInProject(opts.projectDir, a)));
+  job.warnings = audio.warnings;
+  const ff = spawn(process.env.FFMPEG_PATH || 'ffmpeg', ffmpegArgs(opts.project, opts.outFile, audio));
   job.ffmpeg = ff;
   let ffErr = '';
   ff.stderr.on('data', (d) => (ffErr += d.toString()));
   ff.stdin.on('error', () => undefined);
   ff.on('close', (code) => {
+    clearTimeout(job.watchdog);
     if (job.status === 'cancelled') return;
     if (code === 0 && job.status === 'encoding') {
       job.status = 'done';
@@ -133,12 +167,20 @@ export async function acceptFrame(job: ExportJob, index: number, bytes: Buffer):
   job.frame = index + 1;
 }
 
+/** How long ffmpeg may take to exit after its input ended (MOTION_FFMPEG_EXIT_TIMEOUT_MS overrides it for tests). */
+export const FFMPEG_EXIT_TIMEOUT_MS = 30_000;
+
 export function finishFrames(job: ExportJob) {
   if (isFinal(job)) return;
   if (job.frame !== job.total) return fail(job, `Render page stopped at frame ${job.frame}/${job.total}`);
   job.status = 'encoding';
   job.ffmpeg?.stdin.end();
   job.browser?.close().catch(() => undefined);
+  // Watchdog: a stuck ffmpeg ignores SIGTERM, so after the timeout it is SIGKILLed (by fail → cleanup) and the job fails.
+  const ms = Number(process.env.MOTION_FFMPEG_EXIT_TIMEOUT_MS) || FFMPEG_EXIT_TIMEOUT_MS;
+  job.watchdog = setTimeout(() => {
+    if (job.status === 'encoding') fail(job, `ffmpeg did not finish within ${ms / 1000} s after the last frame, so it was stopped. Please try the export again.`);
+  }, ms);
 }
 
 export function fail(job: ExportJob, message: string) {
@@ -157,6 +199,7 @@ export function cancel(job: ExportJob) {
 }
 
 function cleanup(job: ExportJob, removeOutput = false) {
+  clearTimeout(job.watchdog);
   job.browser?.close().catch(() => undefined);
   if (removeOutput) {
     job.ffmpeg?.kill('SIGKILL');
@@ -165,7 +208,7 @@ function cleanup(job: ExportJob, removeOutput = false) {
 }
 
 export function publicJob(job: ExportJob) {
-  return { id: job.id, status: job.status, frame: job.frame, total: job.total, error: job.error, outFile: job.outFile };
+  return { id: job.id, status: job.status, frame: job.frame, total: job.total, error: job.error, warnings: job.warnings, outFile: job.outFile };
 }
 
 /** Delete a file, retrying briefly if Windows still has it locked; never throws (it runs in event callbacks). */

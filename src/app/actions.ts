@@ -4,7 +4,9 @@ import { assetUrl } from '../shared/assetUrl';
 import { makeId } from '../shared/presets';
 import { makeLayer, makeScene } from '../shared/factories';
 import { safeFileName } from '../shared/names';
-import { ASPECTS, emptyProject, ProjectSchema, type Asset, type Layer, type Project, type Scene, type Settings, type ShapeKind } from '../shared/schema';
+import { ASPECTS, emptyProject, ProjectSchema, type Asset, type AudioClip, type Layer, type Project, type Scene, type Settings, type ShapeKind } from '../shared/schema';
+import { clockLabel, duplicateClipsAt, newClip } from './audio/clips';
+import { loadAudioInfo } from './audio/waveform';
 import { deepCloneLayer, findLayer, useEditor } from './store';
 
 const S = () => useEditor.getState();
@@ -302,13 +304,23 @@ async function sha256Hex(buf: ArrayBuffer) {
   return [...new Uint8Array(h)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+/** File types the importer accepts (also the file inputs' `accept` lists). */
+export const IMAGE_EXTS = '.png,.jpg,.jpeg,.webp,.svg';
+export const FONT_EXTS = '.ttf,.otf,.woff,.woff2';
+export const AUDIO_EXTS = '.mp3,.wav,.ogg,.m4a,.aac,.flac';
+export const IMPORT_ACCEPT = `${IMAGE_EXTS},${FONT_EXTS},${AUDIO_EXTS}`;
+
 function classify(file: File): Asset['type'] | null {
   const n = file.name.toLowerCase();
   if (/\.(png|jpe?g|webp)$/.test(n)) return 'image';
   if (/\.svg$/.test(n)) return 'svg';
   if (/\.(ttf|otf|woff2?)$/.test(n)) return 'font';
+  if (/\.(mp3|wav|ogg|m4a|aac|flac)$/.test(n)) return 'audio';
   return null;
 }
+
+/** Images and SVGs can replace each other; fonts and sounds only their own kind. */
+const kindOf = (t: Asset['type']) => (t === 'svg' ? 'image' : t);
 
 async function imageSize(url: string): Promise<{ width: number; height: number } | null> {
   const img = new Image();
@@ -324,7 +336,7 @@ async function imageSize(url: string): Promise<{ width: number; height: number }
 /** Upload original bytes (unmodified) and describe them as an Asset. */
 async function uploadFile(file: File, keepId?: string): Promise<Asset> {
   const type = classify(file);
-  if (!type) throw new Error(`${file.name}: unsupported file type (use PNG, JPG, WebP, SVG, TTF, OTF, WOFF, WOFF2)`);
+  if (!type) throw new Error(`${file.name}: unsupported file type (use PNG, JPG, WebP, SVG, TTF, OTF, WOFF, WOFF2, MP3, WAV, OGG, M4A, AAC or FLAC)`);
   const bytes = await file.arrayBuffer();
   const { hash } = await api<{ hash: string }>('/api/assets', {
     method: 'POST',
@@ -336,6 +348,11 @@ async function uploadFile(file: File, keepId?: string): Promise<Asset> {
   const asset: Asset = { id: keepId ?? makeId('asset'), originalName: file.name, relativePath: `assets/${hash.slice(0, 8)}-${safe}`, type, hash };
   if (type === 'font') {
     asset.fontFamily = file.name.replace(/\.[^.]+$/, '').replace(/[^\w\- ]+/g, ' ').trim() || 'Imported font';
+  } else if (type === 'audio') {
+    // Never through imageSize(): length (+ waveform peaks, cached) from a low-rate decode, or ffmpeg on the server.
+    const info = await loadAudioInfo(asset, null, bytes);
+    if (!info || !(info.duration > 0.001)) throw new Error(`${file.name}: could not read this audio file`);
+    asset.duration = Math.round(info.duration * 1e6) / 1e6;
   } else {
     const size = await imageSize(assetUrl(null, asset));
     if (!size) throw new Error(`${file.name}: could not decode image`);
@@ -350,6 +367,10 @@ export async function importFiles(files: File[]) {
       const asset = await uploadFile(file);
       const existing = S().project.assets.find((a) => a.hash === asset.hash);
       const use = existing ?? asset;
+      if (use.type === 'audio') {
+        addClip(use, { newAsset: existing ? undefined : asset });
+        continue;
+      }
       if (!existing) S().commit((d) => void d.assets.push(asset));
       if (use.type === 'font') S().toast(`Font "${use.fontFamily}" added — pick it in a text layer's Font menu.`);
       else addImageLayer(use);
@@ -359,11 +380,55 @@ export async function importFiles(files: File[]) {
   }
 }
 
+// ---------------------------------------------------------------- audio clips
+
+/**
+ * Add a clip of an audio asset (new-clip defaults in audio/clips.ts) and select it. With `newAsset`, the asset is
+ * added in the same undo step. `atPlayhead` always places it at the playhead ("+ at playhead").
+ */
+export function addClip(asset: Asset, opts: { newAsset?: Asset; atPlayhead?: boolean } = {}) {
+  const { project, time } = S();
+  const clip = newClip(asset, project, time, makeId('clip'), { atPlayhead: opts.atPlayhead });
+  S().commit((d) => {
+    if (opts.newAsset) d.assets.push(opts.newAsset);
+    d.audio.push(clip);
+  });
+  S().select({ audioIds: [clip.id] });
+  S().toast(`Added ${asset.originalName} at ${clockLabel(clip.start)} — see the Audio rows`);
+  return clip.id;
+}
+
+/** Change clips in one undo step. */
+export function updateClips(ids: string[], recipe: (clip: Draft<AudioClip>) => void) {
+  S().commit((d) => {
+    for (const c of d.audio) if (ids.includes(c.id)) recipe(c);
+  });
+}
+
+export function deleteClips(ids: string[]) {
+  if (!ids.length) return;
+  S().commit((d) => {
+    d.audio = d.audio.filter((c) => !ids.includes(c.id));
+  });
+  S().select({ audioIds: [] });
+}
+
+/** Ctrl+D: copies of the selected clips, the earliest at the playhead (others keep their spacing). */
+export function duplicateClips(ids: string[]) {
+  const { project, time } = S();
+  const copies = duplicateClipsAt(project.audio, ids, time, () => makeId('clip'));
+  if (!copies.length) return;
+  S().commit((d) => void d.audio.push(...copies));
+  S().select({ audioIds: copies.map((c) => c.id) });
+}
+
 /** Point an existing asset id at a new file; layers using it keep working. */
 export async function relinkAsset(assetId: string, file: File) {
   try {
     const old = S().project.assets.find((a) => a.id === assetId);
     if (!old) return;
+    const type = classify(file);
+    if (type && kindOf(type) !== kindOf(old.type)) throw new Error(`${file.name}: pick a ${kindOf(old.type) === 'audio' ? 'sound' : kindOf(old.type)} file to replace ${old.originalName}`);
     const asset = await uploadFile(file, assetId);
     if (old.type === 'font') asset.fontFamily = old.fontFamily;
     S().commit((d) => {

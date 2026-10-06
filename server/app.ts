@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { createServer as createViteServer } from 'vite';
+import { decodeAudioInfo } from './audioDecode';
 import { acceptFrame, cancel, fail, ffmpegAvailable, finishFrames, getJob, publicJob, startExport, FFMPEG_HELP } from './exporter';
 import { HttpError, parseProject, sanitizeName, Workspace } from './projects';
 
@@ -55,12 +56,25 @@ export async function startServer(opts: { port: number; workspace: string; host?
     res.json(ws.storeScratch(req.body, filename));
   }));
   /** ?project=<name>&path=<relativePath>&hash=<sha256> */
-  app.get('/api/asset', wrap((req, res) => {
+  const assetFile = (req: Request) => {
     const name = String(req.query.project ?? '');
     const dir = name ? ws.projectDir(name) : null;
     const file = ws.resolveAsset(dir, { relativePath: String(req.query.path ?? ''), hash: String(req.query.hash ?? '') });
     if (!file) throw new HttpError(404, 'Asset missing');
-    res.sendFile(file, { dotfiles: 'allow', headers: { 'Cache-Control': 'no-cache' } });
+    return file;
+  };
+  app.get('/api/asset', wrap((req, res) => {
+    res.sendFile(assetFile(req), { dotfiles: 'allow', headers: { 'Cache-Control': 'no-cache' } });
+  }));
+  /** Length + waveform peaks of an audio asset, decoded by ffmpeg (for formats the browser can't decode). Same query. */
+  app.get('/api/audio-info', wrap(async (req, res) => {
+    const file = assetFile(req);
+    if (!ffmpegAvailable()) throw new HttpError(424, FFMPEG_HELP);
+    try {
+      res.json(await decodeAudioInfo(file));
+    } catch (e) {
+      throw new HttpError(422, `Could not decode this audio file: ${(e as Error).message}`);
+    }
   }));
 
   // ---------------------------------------------------------------- zip
@@ -84,8 +98,9 @@ export async function startServer(opts: { port: number; workspace: string; host?
     const name = req.body.name ? sanitizeName(String(req.body.name)) : '';
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const outFile = path.join(ws.exports, `${name || 'untitled'}-${stamp}.mp4`);
+    const projectDir = name ? ws.projectDir(name) : null;
     try {
-      const job = await startExport({ project, projectDir: name ? ws.projectDir(name) : null, outFile, baseUrl });
+      const job = await startExport({ project, projectDir, outFile, baseUrl, resolveAsset: (a) => ws.resolveAsset(projectDir, a) });
       res.json(publicJob(job));
     } catch (e) {
       const err = e as Error & { status?: number };

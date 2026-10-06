@@ -284,11 +284,11 @@ export function Preview() {
           )}
           {single && single.layer.type === 'cursor' && <CursorPath layer={single.layer} hs={hs} onPointDown={startPointDrag} />}
         </svg>
-        {dragOver && <div className="drop-hint">Drop PNG, JPG, WebP, SVG or font files</div>}
+        {dragOver && <div className="drop-hint">Drop images (PNG, JPG, WebP, SVG), fonts or sounds (MP3, WAV, OGG, M4A, AAC, FLAC)</div>}
       </div>
       {project.scenes.length === 0 && (
         <div className="empty-hint">
-          Empty project. Add a scene, text, shape or cursor from the toolbar, or drop images here.
+          Empty project. Add a scene, text, shape or cursor from the toolbar, or drop images or sounds here.
         </div>
       )}
     </div>

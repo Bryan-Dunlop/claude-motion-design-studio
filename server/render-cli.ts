@@ -21,9 +21,10 @@ const server = await startServer({ port: 0, workspace: process.env.MOTION_WORKSP
 
 let exitCode = 0;
 try {
-  const job = await startExport({ project, projectDir, outFile, baseUrl: server.url });
+  const job = await startExport({ project, projectDir, outFile, baseUrl: server.url, resolveAsset: (a) => server.workspace.resolveAsset(projectDir, a) });
   const { width, height, fps } = project.settings;
   console.log(`Rendering ${job.total} frames at ${width}x${height} @ ${fps}fps -> ${outFile}`);
+  for (const w of job.warnings) console.warn(`Warning: ${w}`);
   const timer = setInterval(() => {
     const j = getJob(job.id)!;
     process.stdout.write(`\r  ${j.status} ${j.frame}/${j.total} (${Math.round((100 * j.frame) / j.total)}%)   `);

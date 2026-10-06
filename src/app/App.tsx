@@ -1,12 +1,29 @@
 import { useEffect, useRef, useState } from 'react';
 import { frameCount } from '../shared/renderFrame';
 import type { ShapeKind } from '../shared/schema';
-import { addCursor, addScene, addShape, addText, deleteLayers, downloadZip, duplicateLayers, importFiles, importZip, newProject, saveProject } from './actions';
+import {
+  addCursor,
+  addScene,
+  addShape,
+  addText,
+  deleteClips,
+  deleteLayers,
+  downloadZip,
+  duplicateClips,
+  duplicateLayers,
+  importFiles,
+  importZip,
+  IMPORT_ACCEPT,
+  newProject,
+  saveProject,
+} from './actions';
+import { startAudio, stopAudio, useAudioEngine, useAudioStatus } from './audio/engine';
 import { ExportDialog, OpenDialog, SaveAsDialog } from './components/Dialogs';
 import { LayersPanel } from './components/LayersPanel';
 import { Preview } from './components/Preview';
 import { Properties } from './components/Properties';
 import { Timeline } from './components/Timeline';
+import { usePrefs } from './prefs';
 import { useResourceLoader } from './resources';
 import { isDirty, snapToFrame, useEditor } from './store';
 
@@ -31,6 +48,7 @@ function formatTime(t: number) {
 
 export function App() {
   useResourceLoader();
+  useAudioEngine();
   const [dialog, setDialog] = useState<DialogKind>(null);
   const projectName = useEditor((s) => s.projectName);
   const dirty = useEditor(isDirty);
@@ -82,7 +100,8 @@ export function App() {
         st.redo();
       } else if (mod && e.key.toLowerCase() === 'd') {
         e.preventDefault();
-        duplicateLayers(st.selection.layerIds);
+        if (st.selection.layerIds.length) duplicateLayers(st.selection.layerIds);
+        else if (st.selection.audioIds.length) duplicateClips(st.selection.audioIds);
       } else if (e.key === ' ') {
         e.preventDefault();
         togglePlay();
@@ -97,6 +116,9 @@ export function App() {
         if (st.selection.layerIds.length) {
           e.preventDefault();
           deleteLayers(st.selection.layerIds);
+        } else if (st.selection.audioIds.length) {
+          e.preventDefault();
+          deleteClips(st.selection.audioIds);
         }
       } else if (e.key === 'Escape') {
         st.clearSelectionStep();
@@ -153,7 +175,11 @@ export function App() {
             </div>
           </details>
           <button onClick={addCursor} title="Add an animated mouse cursor with click ripples" data-testid="add-cursor">+ Cursor</button>
-          <button onClick={() => fileInput.current?.click()} title="Import PNG, JPG, WebP, SVG or fonts (you can also drag files onto the preview)" data-testid="btn-import">
+          <button
+            onClick={() => fileInput.current?.click()}
+            title="Import images (PNG, JPG, WebP, SVG), fonts (TTF, OTF, WOFF) or sounds (MP3, WAV, OGG, M4A, AAC, FLAC). You can also drag files onto the preview."
+            data-testid="btn-import"
+          >
             Import asset…
           </button>
           <details className="na-menu">
@@ -177,7 +203,7 @@ export function App() {
           type="file"
           hidden
           multiple
-          accept=".png,.jpg,.jpeg,.webp,.svg,.ttf,.otf,.woff,.woff2"
+          accept={IMPORT_ACCEPT}
           data-testid="file-input"
           onChange={(e) => {
             void importFiles([...(e.target.files ?? [])]);
@@ -231,36 +257,60 @@ function togglePlay() {
   st.setPlaying(!st.playing);
 }
 
-/** Preview clock. Only the playhead advances; frames are still drawn by renderFrame(project, time). */
+/**
+ * Preview clock. Only the playhead advances; frames are still drawn by renderFrame(project, time). The clock is
+ * performance.now()-based; the audio engine follows it: (re)started on play, loop wrap and seek, stopped on pause.
+ */
 function usePlayback() {
   const playing = useEditor((s) => s.playing);
   useEffect(() => {
     if (!playing) return;
     let raf = 0;
-    const t0 = performance.now();
-    const start = useEditor.getState().time;
+    let t0 = performance.now();
+    let start = useEditor.getState().time;
+    let lastSet = start;
+    let lap = 0;
+    startAudio(start);
     const tick = () => {
       const st = useEditor.getState();
       const dur = st.project.settings.durationSec;
-      let t = start + (performance.now() - t0) / 1000;
+      if (st.time !== lastSet) {
+        // The playhead was moved while playing (seek): carry on from there.
+        start = st.time;
+        t0 = performance.now();
+        lap = 0;
+        startAudio(start);
+      }
+      const raw = start + (performance.now() - t0) / 1000;
+      let t = raw;
       if (st.playUntil !== null && t >= st.playUntil) {
         st.setTime(st.playUntil);
         st.setPlaying(false);
         return;
       }
       if (t >= dur) {
-        if (st.loop) t = t % dur;
-        else {
+        if (st.loop) {
+          t = t % dur;
+          const n = Math.floor(raw / dur);
+          if (n !== lap) {
+            lap = n;
+            startAudio(t);
+          }
+        } else {
           st.setTime(dur);
           st.setPlaying(false);
           return;
         }
       }
       st.setTime(t);
+      lastSet = useEditor.getState().time;
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      cancelAnimationFrame(raf);
+      stopAudio();
+    };
   }, [playing]);
 }
 
@@ -269,6 +319,9 @@ function PlaybackBar() {
   const playing = useEditor((s) => s.playing);
   const loop = useEditor((s) => s.loop);
   const project = useEditor((s) => s.project);
+  const soundOn = usePrefs((s) => s.soundOn);
+  const setPref = usePrefs((s) => s.setPref);
+  const preparing = useAudioStatus((s) => s.preparing);
   const st = useEditor.getState;
   const fps = project.settings.fps;
   const total = frameCount(project);
@@ -296,6 +349,20 @@ function PlaybackBar() {
       <button className={loop ? 'toggled' : ''} onClick={() => st().setLoop(!loop)} title="Loop playback">
         ⟳ Loop
       </button>
+      <button
+        className={soundOn ? 'toggled' : ''}
+        onClick={() => setPref({ soundOn: !soundOn })}
+        title={soundOn ? 'Sound is on while previewing. Click to mute the preview (the export is not affected).' : 'Sound is off while previewing. Click to hear audio clips and click sounds.'}
+        data-testid="btn-sound"
+        aria-pressed={soundOn}
+      >
+        {soundOn ? '🔊' : '🔇'} Sound
+      </button>
+      {preparing > 0 && (
+        <span className="muted small" data-testid="audio-preparing" title="Sound files are being decoded for preview; they join in as soon as they are ready.">
+          preparing audio…
+        </span>
+      )}
       <span className="timecode" data-testid="timecode">
         {formatTime(time)} / {formatTime(project.settings.durationSec)}
       </span>

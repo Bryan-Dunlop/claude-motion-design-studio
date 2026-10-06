@@ -16,3 +16,9 @@
 .customise .row-kf { display: none; }
 .customise .row-label { white-space: normal; line-height: 1.2; }
 .customise .check-row .check { grid-column: 1 / -1; }
+/* Shapes v2 (A3): gradient angle with an arrow that turns with it; the "add an outline first" hint in Draw outline (trim). */
+.angle-field { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.angle-field .num-suffix { flex: 1; }
+.angle-arrow { flex: none; width: 16px; height: 16px; fill: none; stroke: var(--key); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.trim-hint { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 12px; }
+.trim-hint button { flex: none; padding: 2px 8px; font-size: 12px; }

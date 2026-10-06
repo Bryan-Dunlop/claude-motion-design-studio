@@ -32,7 +32,7 @@ export function recordingCtx(width = 1920, height = 1080, name = 'main'): Record
       if (prop === 'createLinearGradient' || prop === 'createRadialGradient')
         return (...args: unknown[]) => {
           log.push(`${prop}(${JSON.stringify(args)})`);
-          return { addColorStop: (o: number, c: string) => log.push(`addColorStop(${o},${JSON.stringify(c)})`) };
+          return { addColorStop: (o: number, c: string) => log.push(`addColorStop(${JSON.stringify([o, c])})`) };
         };
       if (prop in t) return t[prop];
       return (...args: unknown[]) => log.push(`${prop}(${JSON.stringify(args, (_k, v) => (v && typeof v === 'object' && 'name' in v && 'width' in v ? `<canvas ${v.name}>` : v))})`);

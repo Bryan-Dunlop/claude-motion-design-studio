@@ -24,6 +24,7 @@ import {
 } from './geometry';
 import { resolveLayer } from './interpolate';
 import type { CursorLayer, ImageLayer, Layer, ShapeLayer, TextLayer } from './schema';
+import { shapeTrim } from './shapes';
 import { caretRegion, textAnimReach } from './textAnim';
 
 /** Antialiasing fringe around drawn edges, in canvas pixels. */
@@ -84,11 +85,17 @@ function signedBox(w: number, h: number): Box {
   return { x0: Math.min(0, w), y0: Math.min(0, h), x1: Math.max(0, w), y1: Math.max(0, h) };
 }
 
+/** Square line ends show (open line or trimmed outline): a cap corner sits half the width diagonally past the end. */
+function squareEnds(layer: ShapeLayer): boolean {
+  return layer.lineCap === 'square' && (layer.shape === 'line' || shapeTrim(layer).kind === 'dash');
+}
+
 function shapeInk(layer: ShapeLayer): Box {
   const box = signedBox(layer.width, layer.height);
   if (layer.strokeWidth <= 0) return box;
-  // Rects (90° miters reach the corner of the box grown by half the width), ellipses and lines: × 1.
-  return inflateBox(box, (layer.strokeWidth / 2) * (hasAcuteCorners(layer) ? MITER_LIMIT : 1));
+  // Rects (90° miters reach the corner of the box grown by half the width), ellipses and lines: × 1; square ends: × √2.
+  const reach = hasAcuteCorners(layer) ? MITER_LIMIT : squareEnds(layer) ? Math.SQRT2 : 1;
+  return inflateBox(box, (layer.strokeWidth / 2) * reach);
 }
 
 function imageInk(layer: ImageLayer): Box {

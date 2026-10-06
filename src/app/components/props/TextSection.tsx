@@ -3,10 +3,13 @@ import type { Scene, TextLayer } from '../../../shared/schema';
 import { useEditor } from '../../store';
 import { NumberField, Row, Section, Select, TextField } from '../Fields';
 import type { LayerFields } from './common';
+import { FillRows } from './engineFields';
 
 export function TextSection({ layer, fields }: { scene: Scene; layer: TextLayer; fields: LayerFields }) {
   const assets = useEditor((s) => s.project.assets);
-  const { num, color, setStatic } = fields;
+  const { num, color, val, setStatic } = fields;
+  // Outline colour only matters once there is an outline (now or at some keyframe).
+  const outlined = Number(val('strokeWidth')) > 0 || !!layer.keyframes.strokeWidth?.some((k) => Number(k.value) > 0);
   return (
     <Section title="Typography">
       <Row label="Text" tip="The words shown. Press Enter for a new line.">
@@ -45,7 +48,9 @@ export function TextSection({ layer, fields }: { scene: Scene; layer: TextLayer;
           onChange={(align) => setStatic({ align })}
         />
       </Row>
-      {color('color', 'Colour')}
+      <FillRows layer={layer} fields={fields} colorProp="color" />
+      {num('strokeWidth', 'Outline width', { min: 0, tip: 'Outline around the letters, in pixels. 0 = no outline.' })}
+      {outlined && color('stroke', 'Outline', 'Colour of the outline around the letters.')}
     </Section>
   );
 }

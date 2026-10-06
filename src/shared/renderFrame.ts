@@ -29,6 +29,7 @@ import {
 import { AA_PAD, GLYPH_PAD, inkBoundsResolved } from './inkBounds';
 import { resolveLayer } from './interpolate';
 import type { CursorLayer, ImageLayer, Layer, Project, Scene, ShapeLayer, TextLayer } from './schema';
+import { linearGradient, shapeTrim, traceShape } from './shapes';
 import { textAnimating, textAnimFrame, type DrawUnit } from './textAnim';
 import { blurPad, directionalLayout, dissolve, TRANSITION_BLUR, zoomFactor, type DissolveSource } from './transitionDraw';
 import { partnerLocalTime, planTransitions, type TransitionPlan } from './transitions';
@@ -127,9 +128,22 @@ function isDark(hex: string): boolean {
 
 // ---------------------------------------------------------------- layer drawing
 
+/** Text gradient across the layer box: units drawn one by one share it and carry their part of it as they move. */
+function textGradient(ctx: Ctx2D, layer: TextLayer, box: { w: number; h: number }): CanvasGradient {
+  return linearGradient(ctx, box.w, box.h, layer.gradientAngle, layer.color, layer.gradientTo);
+}
+
+/** Outline state for text (strokeText is drawn before the fill, so only the outer half of the outline shows). */
+function setTextOutline(ctx: Ctx2D, layer: TextLayer) {
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = layer.strokeWidth;
+  ctx.strokeStyle = layer.stroke;
+}
+
 /**
  * Text at layer-local time `local`. While a text animator runs, the units are drawn one by one (drawTextUnits);
- * otherwise whole lines, exactly like v1. `device` is the context's current transform (render scale × layer matrix).
+ * otherwise whole lines, exactly like v1 (outlines first, then fills). `device` is the context's current transform
+ * (render scale × layer matrix).
  */
 function drawText(ctx: Ctx2D, layer: TextLayer, local: number, scale: number, device: Matrix) {
   const anim = textAnimFrame(ctx, layer, local);
@@ -138,12 +152,16 @@ function drawText(ctx: Ctx2D, layer: TextLayer, local: number, scale: number, de
     const m = measureText(ctx, layer);
     ctx.font = fontString(layer);
     setLetterSpacing(ctx, layer.letterSpacing);
-    ctx.fillStyle = layer.color;
+    ctx.fillStyle = layer.fillMode === 'linear' ? textGradient(ctx, layer, m) : layer.color;
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'left';
-    m.lines.forEach((line, i) => {
-      ctx.fillText(line.text, lineX(layer.align, m.w, line.width), i * m.lineHeightPx + m.lineHeightPx / 2);
-    });
+    const draw = (op: 'strokeText' | 'fillText') =>
+      m.lines.forEach((line, i) => ctx[op](line.text, lineX(layer.align, m.w, line.width), i * m.lineHeightPx + m.lineHeightPx / 2));
+    if (layer.strokeWidth > 0) {
+      setTextOutline(ctx, layer);
+      draw('strokeText');
+    }
+    draw('fillText');
   }
   if (anim.caret) {
     const c = anim.caret;
@@ -156,62 +174,63 @@ function drawText(ctx: Ctx2D, layer: TextLayer, local: number, scale: number, de
  * Draw text one unit at a time, each with its own opacity, offset/scale (about its centre) and blur. `device` is the
  * context's current transform; the blur of each unit is k = scale × |layer scale| times its layer-px blur (chained when
  * the in and out phases both blur) and is clipped to the area that unit can reach, since Chromium filters the whole clip
- * region otherwise.
+ * region otherwise. With an outline, every unit's outline is drawn before any fill (like whole lines), so an outline
+ * never covers a neighbouring letter.
  */
 export function drawTextUnits(ctx: Ctx2D, layer: TextLayer, units: readonly DrawUnit[], scale: number, device: Matrix) {
   const k = scale * Math.abs(layer.scale);
   const pad = layer.fontSize * GLYPH_PAD + layer.strokeWidth / 2;
   ctx.font = fontString(layer);
   setLetterSpacing(ctx, layer.letterSpacing);
-  ctx.fillStyle = layer.color;
+  ctx.fillStyle = layer.fillMode === 'linear' ? textGradient(ctx, layer, measureText(ctx, layer)) : layer.color;
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'left';
-  for (const u of units) {
-    const { alpha, s, tx, ty, blurs } = u.look;
-    if (!(alpha > 0) || !(s > 0) || !u.text.trim()) continue;
-    const radii = blurs.map((b) => b * k).filter((r) => r > 1e-3);
-    ctx.save();
-    if (radii.length) {
-      const spread = radii.reduce((sum, r) => sum + blurMargin(r), 0);
-      const c = roundOutBox(inflateBox(transformBox(multiplyMatrix(device, [s, 0, 0, s, tx, ty]), inflateBox(u.ink, pad)), AA_PAD + spread));
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.beginPath();
-      ctx.rect(c.x0, c.y0, c.x1 - c.x0, c.y1 - c.y0);
-      ctx.clip();
-      ctx.setTransform(device[0], device[1], device[2], device[3], device[4], device[5]);
+  const outline = layer.strokeWidth > 0;
+  if (outline) setTextOutline(ctx, layer);
+  for (const op of outline ? (['strokeText', 'fillText'] as const) : (['fillText'] as const)) {
+    for (const u of units) {
+      const { alpha, s, tx, ty, blurs } = u.look;
+      if (!(alpha > 0) || !(s > 0) || !u.text.trim()) continue;
+      const radii = blurs.map((b) => b * k).filter((r) => r > 1e-3);
+      ctx.save();
+      if (radii.length) {
+        const spread = radii.reduce((sum, r) => sum + blurMargin(r), 0);
+        const c = roundOutBox(inflateBox(transformBox(multiplyMatrix(device, [s, 0, 0, s, tx, ty]), inflateBox(u.ink, pad)), AA_PAD + spread));
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.beginPath();
+        ctx.rect(c.x0, c.y0, c.x1 - c.x0, c.y1 - c.y0);
+        ctx.clip();
+        ctx.setTransform(device[0], device[1], device[2], device[3], device[4], device[5]);
+      }
+      ctx.globalAlpha *= alpha;
+      if (s !== 1 || tx !== 0 || ty !== 0) ctx.transform(s, 0, 0, s, tx, ty);
+      if (radii.length) ctx.filter = radii.map((r) => `blur(${r}px)`).join(' ');
+      ctx[op](u.text, u.x, u.y);
+      ctx.restore();
     }
-    ctx.globalAlpha *= alpha;
-    if (s !== 1 || tx !== 0 || ty !== 0) ctx.transform(s, 0, 0, s, tx, ty);
-    if (radii.length) ctx.filter = radii.map((r) => `blur(${r}px)`).join(' ');
-    ctx.fillText(u.text, u.x, u.y);
-    ctx.restore();
   }
 }
 
-function roundRectPath(ctx: Ctx2D, w: number, h: number, r: number) {
-  // Never negative: arcTo throws on a negative radius (e.g. a size animated past 0 by a spring).
-  const rr = Math.max(0, Math.min(r, w / 2, h / 2));
-  ctx.beginPath();
-  ctx.moveTo(rr, 0);
-  ctx.arcTo(w, 0, w, h, rr);
-  ctx.arcTo(w, h, 0, h, rr);
-  ctx.arcTo(0, h, 0, 0, rr);
-  ctx.arcTo(0, 0, w, 0, rr);
-  ctx.closePath();
-}
-
+/**
+ * Shape: fill (solid or linear gradient; lines have none), then the outline — trimmed with a line dash when only part
+ * of it shows (docs/v2-plan.md A3). Untrimmed rects/ellipses make exactly the v1 calls.
+ */
 function drawShape(ctx: Ctx2D, layer: ShapeLayer) {
-  if (layer.shape === 'ellipse') {
-    ctx.beginPath();
-    ctx.ellipse(layer.width / 2, layer.height / 2, Math.abs(layer.width / 2), Math.abs(layer.height / 2), 0, 0, Math.PI * 2);
-  } else {
-    roundRectPath(ctx, layer.width, layer.height, layer.cornerRadius);
+  const trim = shapeTrim(layer);
+  traceShape(ctx, layer, trim.kind === 'dash');
+  if (layer.shape !== 'line') {
+    ctx.fillStyle = layer.fillMode === 'linear' ? linearGradient(ctx, layer.width, layer.height, layer.gradientAngle, layer.fill, layer.gradientTo) : layer.fill;
+    ctx.fill();
   }
-  ctx.fillStyle = layer.fill;
-  ctx.fill();
-  if (layer.strokeWidth > 0) {
+  if (layer.strokeWidth > 0 && trim.kind !== 'none') {
     ctx.lineWidth = layer.strokeWidth;
     ctx.strokeStyle = layer.stroke;
+    // Line ends only show on open paths and trimmed outlines.
+    if (trim.kind === 'dash' || layer.shape === 'line') ctx.lineCap = layer.lineCap;
+    if (trim.kind === 'dash') {
+      ctx.setLineDash(trim.dash);
+      ctx.lineDashOffset = trim.offset;
+    }
     ctx.stroke();
   }
 }
@@ -263,7 +282,8 @@ function drawLayerBody(ctx: Ctx2D, layer: Layer, local: number, res: RenderResou
 function isMultiDraw(layer: Layer, local: number, res: RenderResources): boolean {
   switch (layer.type) {
     case 'shape':
-      return layer.strokeWidth > 0;
+      // A line is its outline alone.
+      return layer.shape !== 'line' && layer.strokeWidth > 0;
     case 'text':
       // A running text animator draws unit by unit (and maybe a caret).
       return layer.content.includes('\n') || layer.strokeWidth > 0 || textAnimating(layer, local);

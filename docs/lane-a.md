@@ -266,3 +266,124 @@ Playwright — `tests/e2e/engine-textanim.spec.ts`:
   include easing overshoot, Grow overshoot (scale − 1) × max(box w, h), chained blurs and the caret region.
 - A3 (text outline / gradient): add the outline to both the plain path and `drawTextUnits` (strokeText before each
   unit's fillText); a gradient should be set up once in layer-box coordinates so pieces share one gradient.
+
+## A3 — Shapes v2, trim paths, gradients, text outline, "Draw on" preset — DONE
+
+### What the user gets
+
+**Shape section** (Properties → *Shape*):
+
+- `Type`: Rectangle / Ellipse / Triangle / Star / Polygon / Line (all six are drawn now).
+  - Triangle: point at the top centre, base along the bottom of the box. Polygon: `Sides` (3–64), first corner at the
+    top, corners on the ellipse that fits the box. Star: `Points` (3–64) and `Inner size` (◆, a percentage of the
+    star's size; smaller = spikier). Line: a straight line across the middle of its box (the box height only sets how
+    easy it is to grab).
+- `Fill`: **Solid** (one `Colour` ◆) or **Gradient** (`From` ◆, `To` ◆, `Angle` ◆ with a small arrow that turns with
+  the angle: 0° = left → right, 90° = top → bottom). The gradient runs through the middle of the box and reaches its
+  far corners exactly. Switching to Gradient when *To* is the same colour as the fill starts *To* 45 % of the way to
+  black (light colours) or white (dark colours) so the gradient shows at once — one undo step. Lines have no fill, so
+  the Fill rows are hidden for them.
+- `Outline width` (◆), then `Outline` colour (◆) once there is an outline (width > 0 now or at a keyframe). For a line
+  they read `Line width` / `Line colour` and are always shown.
+- `Line ends` — Round (default) / Flat / Square — shown for lines and while the outline is trimmed (closed, untrimmed
+  outlines have no ends).
+
+**Draw outline (trim)** (shapes; after the Shape section, collapsed until used, then `Draw outline (trim) ●` and open
+when the layer is selected): `Start %`, `End %`, `Offset %` (◆ each; percentages of the outline, stored 0..1). Only
+the part of the outline between Start and End is drawn; Offset slides that part along the outline and wraps around
+(a part that crosses the start point stays one continuous piece). Animate End 0 → 100 % to "draw" the outline. The fill
+is not affected. Without an outline the section says "Only the outline is drawn — add one first" with an
+**Add outline** button: outline width = 1 % of the frame's short edge (22 px at 4K, 11 px at 1080p) and a
+see-through fill (same colour, alpha 0; a gradient fill becomes solid), one undo step.
+
+Where outlines start (all run clockwise on screen): rectangle — on the top edge just after the top-left corner;
+ellipse — 12 o'clock; triangle / polygon / star — the top corner; line — the left end.
+
+**Typography**: the same `Fill` Solid | Gradient rows for text (the gradient spans the whole text box; animated
+letters/words carry their part of it as they move), `Outline width` (◆) and, once it is > 0, `Outline` colour (◆).
+The outline is drawn *before* the fill with round joins, so it only shows outside the letters and never eats into
+them (or into a neighbouring letter while text animates).
+
+**Animation presets → Effect → Draw on**: animates the outline's End from 0 to 100 % (in) or 100 → 0 % (out) with the
+usual delay / duration / easing; re-applying replaces it. It is greyed out ("Select a shape to use Draw on") unless a
+shape is selected; with shapes and other layers selected it is applied to the shapes and the rest are skipped with the
+usual toast. Applying it to a shape without an outline adds a toast pointing to *Draw outline (trim)*.
+
+### Tests
+
+Unit (vitest) — `tests/unit/engine-shapes.test.ts`:
+
+- outline paths: *rect starts on the top edge just after the top-left corner radius and runs clockwise*; *a trimmed
+  ellipse starts at 12 o'clock and runs clockwise; an untrimmed one keeps the v1 call*; *polygon, star and triangle
+  start at vertex 0 at the top and run clockwise; the line starts at its left end*; *vertices …*.
+- *outline length = numeric integration of the traced path* — the path calls traceShape makes are replayed through an
+  independent canvas-rules flattener (arcTo tangent points, ellipse sampling) and compared with `shapeLength`: sharp
+  and rounded rects, **a pill with r > h/2** (and an upright one with r > w/2), a circle-shaped rounded square, three
+  ellipses (incl. a 10:1 flat one, Ramanujan II within 1e-4), triangle, pentagon, 64-gon, three stars, line; plus the
+  formula cases.
+- trim: *setLineDash([v, L − v]) … offset −(((start + offset) % 1 + 1) % 1)·L* (wrap past 1, negative and huge
+  offsets, whole turns = 0 not −0); *v ≤ 0 → no stroke; v ≥ L → solid; clamping*; *the dash shows exactly [start +
+  offset, end + offset] (mod 1) of the outline* (canvas dash semantics simulated at 400 positions × 7 settings);
+  *shapeTrim measures the outline only when trimmed*.
+- gradients: *through the box centre at the angle with half-length (|w cos θ| + |h sin θ|) / 2*; *stops 0 and 1 land on
+  the box corners furthest back / forward (any angle)*; the "To" rule (*equal colours: mixed 45 % toward black when
+  luminance > 0.5, else toward white*, *different colours are kept*).
+- "Draw on": *animates trimEnd only, so it applies to shapes only*; *in: 0 → 1 from the delay; out: 1 → 0 …;
+  re-applying replaces*.
+- draw calls: *a trimmed outline: dash + offset + line ends, set right before the stroke*; *untrimmed outlines draw
+  exactly like v1; a fully trimmed one draws no outline*; *a line is stroke only …*; *gradient fill: one linear
+  gradient across the layer box*; *a line with a drop shadow is a single draw (no scratch canvas) …*; text *outline:
+  round joins, every line stroked before any line is filled*; *gradient across the text box*; *animated units: one
+  gradient for all of them, outlines of every unit before any fill*; *no outline and a solid colour: exactly the plain
+  fill calls*; determinism.
+- *inkBounds contains everything the new shapes paint* (7 setups × 3 render scales: acute/mirrored/trimmed shapes,
+  square line ends, outlined gradient text) and *square line ends widen the box by √2 × half the width only where ends
+  show*.
+- `engine-v1-compat.test.ts` still passes unchanged: untrimmed rects/ellipses and plain text make exactly the v1 calls.
+
+Playwright — `tests/e2e/engine-shapes.spec.ts`:
+
+- *trimmed outlines start where they should and run clockwise: ellipse at 12 o'clock, rect just after its top-left
+  corner*; *a trim that wraps past the start point is continuous: no gap and no doubled overlap* (half-transparent
+  stroke: every sample across the start point = 128 ± 2); *a pill (r > h/2) trimmed to 50 % ends exactly opposite its
+  start* (the outline length agrees with Chromium's).
+- *text outline is drawn before the fill: no fill pixel is covered (the opposite order covers many)*.
+- *gradient fill runs from From to To across the box at the angle*.
+- *export matches renderFrame: trimmed outlines, star, polygon, lines, gradient fills, outlined gradient text*.
+- UI: *Draw outline (trim): Add outline in one step, % fields with ◆, line ends while trimmed*; *Shape section: sides /
+  points / inner size per type, no fill for lines, Fill gradient with From / To / Angle*; *Typography: gradient fill
+  starts "To" from a contrasting shade; the outline colour shows once there is an outline*; *"Draw on" preset: only
+  for shapes; animates the outline 0 → 100 %; mixed selections skip the rest with a toast*.
+
+### Measured
+
+- **Export vs renderFrame** (1920×1080, CRF 16; draw-on rect, gradient star, trimmed hexagon with moving offset, two
+  lines, trimmed gradient ellipse with square ends, triangle, outlined gradient text): mean |diff| 0.81–0.87, PSNR
+  40.9–42.5 dB (frames at 0.17, 0.5 and 0.9 s).
+- **Outline length vs Chromium**: a 50 % dash on rounded rects / pills (L = 937–4627 px) ends 0.2–0.5 px past the
+  exact half-way point (Skia measures arcs as slightly shorter polylines) — under 0.05 % of the outline.
+- **Text outline order**: 'Outline' at 130 px with a 16 px outline: 23 316 fully-filled pixels, 0 covered by the
+  outline; drawing the fill first and the outline second would cover 17 814 of them.
+- **v1 pixels**: a full ellipse fills identically from any start angle (0 bytes differ); a *closed* ellipse from −π/2
+  also strokes identically to v1's unclosed 0 → 2π call (an unclosed −π/2 one differs at its seam: 7 pixels, ≤ 6
+  levels of alpha). Untrimmed ellipses still keep v1's exact call (the v1-compat contract is about draw calls);
+  trimmed ones start at 12 o'clock and are closed, so a trim that wraps past 12 o'clock joins up seamlessly.
+
+### Implementation notes (for the lead)
+
+- `src/shared/shapes.ts` (pure): `shapeVertices`, `traceShape(ctx, geometry, outline)`, `clampedRadius`,
+  `ellipsePerimeter` (Ramanujan II), `shapeLength`, `trimStroke` / `shapeTrim` (dash + JS-wrapped offset),
+  `gradientLine` / `linearGradient` (bad colour strings fall back to transparent instead of throwing), `luminance`
+  (Rec. 709 luma of the sRGB values — colours are mixed in sRGB, so 0.5 is the even split), `mixColor`, `sameColor`,
+  `gradientToFor`.
+- renderFrame: `drawShape` = traceShape → fill (solid/gradient; none for lines) → stroke with `lineCap` + dash only
+  when trimmed (or a line). `drawText` / `drawTextUnits` set the fill (colour or one gradient in layer-box
+  coordinates) and stroke all lines/units before filling. `isMultiDraw`: a line is single-draw.
+- inkBounds: square line ends add √2 × half the width (open lines, trimmed outlines); acute corners keep × miterLimit.
+- presets: `PresetKind` gains `draw`; `presetProps({kind:'draw'}) = ['trimEnd']`; `applyPreset` adds trimEnd 0 → 1.
+- UI: `FillRows` / `OptionSelect` in `props/engineFields.tsx`; `TrimSection` (exported from `ShapeSection.tsx`) is
+  rendered by LayerProps after the type section, like Text animation.
+- `tests/unit/helpers/recordingCtx.ts`: `addColorStop` is now logged as `addColorStop([offset,"colour"])` like every
+  other call (the old `addColorStop(0,"#fff")` form broke `parseEntry` / `drawnPoints`; nothing used it before A3).
+- Cross-lane: ImageSection passes `type` to `RelinkButton` (B1 follow-up) through a JSX spread, because this lane's
+  `RelinkButton` has no `type` prop yet; after the merge it can be written as `type={asset.type}`.

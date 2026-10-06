@@ -12,7 +12,7 @@ export function ImageSection({ layer, fields }: { scene: Scene; layer: ImageLaye
   return (
     <Section title="Image">
       <p className="muted">{asset?.originalName ?? 'Unknown asset'}</p>
-      {isMissing && asset && <RelinkButton assetId={asset.id} name={asset.originalName} />}
+      {isMissing && asset && <RelinkButton {...{ assetId: asset.id, name: asset.originalName, type: asset.type }} />}
       {num('width', 'Width', { min: 1 })}
       {num('height', 'Height', { min: 1 })}
       {asset?.width && (

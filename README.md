@@ -143,16 +143,21 @@ timeline, playback, SVG/font import, cursor paths; v1 projects open in v2.
   shadow is visible from frame 1); scene backgrounds; every transition style exported and compared with `renderFrame`
   inside the transition (PSNR ≥ 40 dB); cross-fades have no mid-point dip; the "previous scene" rule; a 4K performance
   guard (< 400 ms per heavy frame).
-- **Text animation** — every style and setting, in and out timing, kerning identical to whole-line text, the caret,
-  export compared mid-animation (PSNR ≥ 42.7 dB).
+- **Text animation** — every style and setting, in and out timing, kerning identical to whole-line text (also for
+  right-to-left lines), the caret, export compared mid-animation (PSNR ≥ 42.7 dB); text in other scripts (Polish,
+  Cyrillic, Vietnamese…) is in Inter from the first frame; imported fonts with any file name.
 - **Shapes** — every shape kind, outline lengths checked against numeric integration, trim paths incl. wrap-around and
   pills, gradients, text outlines (also while fading), *Draw on*, export compared (PSNR ≥ 40.8 dB).
 - **Sound** — import (incl. formats the browser can't decode), clip defaults, waveform rows, move/trim/volume/fades,
   click sounds, preview engine, missing-file relink; real exports measured: sound starts at 0, is exactly as long as
   the video, and is placed, trimmed and faded where it should be.
-- **Timeline & preview** — keyframe selection, rows, delete, relative copy/paste, keyboard precedence, snapping (exact
-  centre/edges; Ctrl disables), guides incl. the 9:16 safe zone, marquee, menus closing on outside click/Esc,
-  resizable timeline, "+ Scene" splitting the timeline.
+- **Timeline & preview** — keyframe selection, rows, delete, relative copy/paste (also into another project, files
+  included), keyboard precedence, snapping (exact centre/edges; Ctrl disables), guides incl. the 9:16 safe zone,
+  marquee, menus closing on outside click/Esc, resizable timeline, "+ Scene" splitting the timeline; a dropped
+  keyframe replaces the one it lands on; the preview shows the last frame at the end and survives a frame that fails
+  to draw.
+- **Editing fields** — a typed value lands on the item it was typed for (as its own undo step) whatever you click
+  next; Escape cancels it; Ctrl+S saves it; undo/redo/Delete work right after picking from a dropdown or a colour.
 - **Export & formats** — 100/50/25 % sizes incl. odd sizes, quality levels, include-audio, unique file names, CLI flags,
   PNG still identical to the video frame, *Make a copy in another format*, Windows-safe names, Notepad/PowerShell files.
 
@@ -163,14 +168,18 @@ timeline, playback, SVG/font import, cursor paths; v1 projects open in v2.
 
 ## Known limitations
 
-- **Windows**: built and tested on Linux. The CI workflow (`.github/workflows/ci.yml`) runs the whole suite on
-  `windows-latest` too — check its result on the pull request; until it is green, treat Windows as untested.
+- **Windows**: developed on Linux; the CI workflow (`.github/workflows/ci.yml`) runs the whole suite on
+  `windows-latest` as well as Ubuntu, and both pass. One end-to-end test (a frozen fake ffmpeg) needs a POSIX shell, so
+  it runs on Linux/macOS only.
 - **Preview vs export**: the preview draws in *your* browser, export in headless Chromium. In Chrome/Edge they match.
 - **Export speed**: CPU-only rendering, roughly 1 minute per 15 s of 4K on 4 cores; blur transitions cost ~0.5 s per
   4K frame while they run.
 - **Sound**: preview needs a click or key press first (browser rule — pressing Play is enough). Sources with more than
   two channels may sound slightly different in preview vs export. Formats the browser can't play still export.
-- **Letter-by-letter animation** can't use ligatures while the letters move (the final text is exact).
+- **Letter-by-letter animation** can't use ligatures while the letters move (the final text is exact); Arabic letters
+  lose their joining while they move.
+- **Right-to-left text** (Hebrew, Arabic) animates by word or letter in place. A line that mixes right-to-left and
+  left-to-right words — or digits, when animating by letter — animates as one whole line.
 - **Format copy** scales and centres; it doesn't re-arrange layouts for the new shape.
 - **Undo history** lives in memory only and resets when you open a project.
 - **Test hook:** the editor exposes its store on `window.__motion` (used by the Playwright tests).

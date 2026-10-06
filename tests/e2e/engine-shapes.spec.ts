@@ -1,6 +1,7 @@
-// A3 shapes v2 in real Chromium: trimmed outlines start where the spec says and wrap without a seam, the outline length
-// matches Skia's (a half-trimmed pill ends at the opposite point), text outlines never cover the fill, gradients run
-// from From to To, the export matches renderFrame (deterministically), and the Shape / Draw outline / Typography / preset UI.
+// A3 shapes v2 in real Chromium: trimmed outlines start where the spec says and wrap without a seam (also across a sharp
+// start corner), the outline length matches Skia's (a half-trimmed pill ends at the opposite point), text outlines never
+// cover the fill (nor show through it while half-transparent), gradients run from From to To, the export matches
+// renderFrame (deterministically), and the Shape / Draw outline / Typography / preset UI.
 import { expect, test, type Page } from '@playwright/test';
 import { ProjectSchema, type Project, type ShapeLayer, type TextLayer } from '../../src/shared/schema';
 import { expectExportMatchesRender, runExport, saveProject } from './exportCompare';
@@ -63,6 +64,76 @@ test('a trim that wraps past the start point is continuous: no gap and no double
   });
   const values = (await pixels(page, p, [...edge, ...arc])).map((px) => px[0]);
   for (const v of values) expect(Math.abs(v - 128), `${values}`).toBeLessThanOrEqual(2);
+});
+
+test('sharp start points: a star starts at its top tip clockwise, and a trim wrapping across a star tip or a square corner keeps the sharp corner', async ({ page }) => {
+  // Star 400×400 (tip at (300, 100), 16 px outline) and a square-cornered rect 400×300 (start = its top-left corner
+  // (100, 150)), butt ends. Visible part [0.95, 1.05]: across the start point.
+  const star = { shape: 'star', x: 300, y: 300, width: 400, height: 400, points: 5, innerRadius: 0.45, strokeWidth: 16 };
+  const rect = { shape: 'rect', x: 300, y: 300, width: 400, height: 300, cornerRadius: 0, strokeWidth: 16 };
+  const wrap = { trimStart: 0, trimEnd: 0.1, trimOffset: 0.95 };
+  type Case = { layer: object; tip: [number, number]; corner: [number, number] };
+  // `corner`: a pixel inside the sharp corner's miter, beyond the start point.
+  const cases: Case[] = [{ layer: star, tip: [300, 100], corner: [300, 88] }, { layer: rect, tip: [100, 150], corner: [94, 144] }];
+  const r = await browserImport(
+    page,
+    '/src/shared/renderFrame.ts',
+    async (mod, arg: { cases: Case[]; wrap: object }) => {
+      const load = (path: string) => import(/* @vite-ignore */ path);
+      const { createRenderCanvas } = await load('/src/shared/canvas.ts');
+      const { ProjectSchema } = await load('/src/shared/schema.ts');
+      const shapes = await load('/src/shared/shapes.ts');
+      const base = { visible: true, locked: false, start: 0, duration: 1, anchorX: 0.5, anchorY: 0.5, scale: 1, rotation: 0, opacity: 1, keyframes: {}, cornerRadius: 0, fill: '#00000000', stroke: '#ffffff', lineCap: 'butt' };
+      const project = (layer: object) =>
+        ProjectSchema.parse({ schemaVersion: 2, settings: { durationSec: 1, aspect: 'custom', width: 600, height: 600, fps: 30, background: '#000000' }, assets: [], scenes: [{ id: 's', name: 'S', start: 0, duration: 1, layers: [{ ...base, id: 'l', name: 'l', type: 'shape', ...layer }] }] });
+      const render = (layer: object) => {
+        const { ctx } = createRenderCanvas(600, 600);
+        mod.renderFrame(project(layer), 0.5, ctx, 1, { images: new Map() });
+        return ctx.getImageData(0, 0, 600, 600).data as Uint8ClampedArray;
+      };
+      /** The same dash on an OPEN copy of the outline (no closePath): the pieces either side of the start are not joined. */
+      const openControl = (layer: any) => {
+        const l = project(layer).scenes[0].layers[0] as any;
+        const { ctx } = createRenderCanvas(600, 600);
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, 600, 600);
+        ctx.translate(l.x - l.width / 2, l.y - l.height / 2);
+        const pts = l.shape === 'rect' ? [[0, 0], [l.width, 0], [l.width, l.height], [0, l.height]] : shapes.shapeVertices(l);
+        ctx.beginPath();
+        [...pts, pts[0]].forEach(([x, y]: number[], i: number) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+        const t = shapes.shapeTrim(l);
+        ctx.setLineDash(t.dash);
+        ctx.lineDashOffset = t.offset;
+        ctx.lineWidth = l.strokeWidth;
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineCap = 'butt';
+        ctx.stroke();
+        return ctx.getImageData(0, 0, 600, 600).data as Uint8ClampedArray;
+      };
+      const at = (img: Uint8ClampedArray, [x, y]: [number, number]) => img[(y * 600 + x) * 4];
+      return arg.cases.map(({ layer, tip, corner }) => {
+        const full = render(layer);
+        const wrapped = render({ ...layer, ...arg.wrap });
+        // Largest difference to the untrimmed outline within 20 px of the start point.
+        let maxDiff = 0;
+        for (let y = tip[1] - 20; y < tip[1] + 20; y++) for (let x = tip[0] - 20; x < tip[0] + 20; x++) maxDiff = Math.max(maxDiff, Math.abs(full[(y * 600 + x) * 4] - wrapped[(y * 600 + x) * 4]));
+        return { maxDiff, cornerFull: at(full, corner), cornerWrapped: at(wrapped, corner), cornerOpen: at(openControl({ ...layer, ...arg.wrap }), corner) };
+      });
+    },
+    { cases, wrap },
+  );
+  console.log(`wrap across a sharp start: ${r.map((c, i) => `${['star tip', 'square corner'][i]}: corner ${c.cornerFull} / wrapped ${c.cornerWrapped} / open control ${c.cornerOpen}, max diff to untrimmed ${c.maxDiff}`).join('; ')}`);
+  for (const c of r) {
+    expect(c.cornerFull, JSON.stringify(c)).toBeGreaterThan(240); // the untrimmed outline's sharp corner
+    expect(c.cornerWrapped, JSON.stringify(c)).toBeGreaterThan(240); // still there: the wrap is one joined piece
+    expect(c.cornerOpen, JSON.stringify(c)).toBeLessThan(10); // what two separate pieces would look like
+    expect(c.maxDiff, JSON.stringify(c)).toBeLessThanOrEqual(24); // the same corner as untrimmed, up to antialiasing
+  }
+  // A 5-point star (edge length 137.75, outline 1377.5) trimmed to its first 5 %: half-way along the first edge from
+  // the top tip, which heads down-right (clockwise); the mirror point on the last edge stays dark.
+  const [first, last] = await pixels(page, project(600, 600, 1, [shape('s', { ...star, trimEnd: 0.05 })]), [[313, 132], [287, 132]]);
+  expect(lum(first)).toBeGreaterThan(240);
+  expect(lum(last)).toBeLessThan(10);
 });
 
 test('a pill (r > h/2) trimmed to 50 % ends exactly opposite its start: the outline length matches Chromium’s', async ({ page }) => {
@@ -132,6 +203,63 @@ test('text outline is drawn before the fill: no fill pixel is covered (the oppos
   expect(r.covered).toBe(0);
   expect(r.coveredWrong).toBeGreaterThan(1000);
   expect(r.red).toBeGreaterThan(5000);
+});
+
+test('half-transparent outlined text is drawn as one group: the outline never shows through its letters', async ({ page }) => {
+  // Blue letters with a black 16 px outline on white, at opacity 0.5 (e.g. half-way through a Fade preset).
+  const layer = { ...base, id: 't', name: 't', type: 'text', duration: 1, x: 400, y: 150, content: 'Outline', fontFamily: 'Inter', fontSize: 130, fontWeight: 900, lineHeight: 1.2, letterSpacing: 0, align: 'center', color: '#4f7cff', stroke: '#000000' };
+  const at = (over: object) => project(800, 300, 1, [{ ...layer, ...over }], '#ffffff');
+  const r = await browserImport(
+    page,
+    '/src/shared/renderFrame.ts',
+    async (mod, arg: { mask: Project; plain: Project; outlined: Project }) => {
+      const load = (path: string) => import(/* @vite-ignore */ path);
+      const { createRenderCanvas } = await load('/src/shared/canvas.ts');
+      const geo = await load('/src/shared/geometry.ts');
+      await document.fonts.load('900 32px Inter');
+      const draw = (p: Project) => {
+        const { ctx } = createRenderCanvas(800, 300);
+        mod.renderFrame(p, 0.5, ctx, 1, { images: new Map() });
+        return ctx.getImageData(0, 0, 800, 300).data as Uint8ClampedArray;
+      };
+      const mask = draw(arg.mask);
+      const plain = draw(arg.plain);
+      const outlined = draw(arg.outlined);
+      // Drawn call by call instead (outline at 50 %, then the fill at 50 %), on the same layout.
+      const l = arg.outlined.scenes[0].layers[0] as any;
+      const { ctx: c } = createRenderCanvas(800, 300);
+      c.fillStyle = '#ffffff';
+      c.fillRect(0, 0, 800, 300);
+      const m = geo.layerMatrix(l, geo.layerBox(c, l));
+      c.setTransform(m[0], m[1], m[2], m[3], m[4], m[5]);
+      c.font = geo.fontString(l);
+      c.textBaseline = 'middle';
+      c.globalAlpha = l.opacity;
+      c.lineJoin = 'round';
+      c.lineWidth = l.strokeWidth;
+      c.strokeStyle = l.stroke;
+      c.strokeText(l.content, 0, (l.fontSize * l.lineHeight) / 2);
+      c.fillStyle = l.color;
+      c.fillText(l.content, 0, (l.fontSize * l.lineHeight) / 2);
+      const perCall = c.getImageData(0, 0, 800, 300).data as Uint8ClampedArray;
+      const diff = (a: Uint8ClampedArray, b: Uint8ClampedArray, i: number) => Math.max(Math.abs(a[i] - b[i]), Math.abs(a[i + 1] - b[i + 1]), Math.abs(a[i + 2] - b[i + 2]));
+      let glyph = 0;
+      let changed = 0;
+      let changedPerCall = 0;
+      for (let i = 0; i < mask.length; i += 4) {
+        if (mask[i] !== 0) continue; // inside the letters: where opaque black letters are fully black
+        glyph++;
+        if (diff(outlined, plain, i) > 8) changed++;
+        if (diff(perCall, plain, i) > 8) changedPerCall++;
+      }
+      return { glyph, changed, changedPerCall };
+    },
+    { mask: at({ color: '#000000' }), plain: at({ opacity: 0.5 }), outlined: at({ opacity: 0.5, strokeWidth: 16 }) },
+  );
+  console.log(`half-transparent outlined text: ${r.glyph} letter pixels, ${r.changed} changed by the outline (drawn call by call: ${r.changedPerCall})`);
+  expect(r.glyph).toBeGreaterThan(5000);
+  expect(r.changed).toBe(0);
+  expect(r.changedPerCall).toBeGreaterThan(5000);
 });
 
 test('gradient fill runs from From to To across the box at the angle', async ({ page }) => {

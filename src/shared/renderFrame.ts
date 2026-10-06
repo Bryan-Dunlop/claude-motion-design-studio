@@ -294,6 +294,15 @@ function isMultiDraw(layer: Layer, local: number, res: RenderResources): boolean
   }
 }
 
+/**
+ * Outlined text is drawn outline first, so only the outer half of the outline shows. Drawn call by call while the
+ * layer is partly transparent, the inner half would show through the see-through fill, so it is then drawn as one
+ * group (isolated, opacity applied once). Text animators still fade each unit's outline and fill separately.
+ */
+function needsGroupOpacity(layer: Layer): boolean {
+  return layer.type === 'text' && layer.strokeWidth > 0 && layer.opacity < 1;
+}
+
 /** Clip to a canvas-pixel box (whole pixels), then put the view transform back. */
 function clipToBox(ctx: Ctx2D, box: Box, scale: number, ox: number, oy: number) {
   const b = roundOutBox(box);
@@ -312,7 +321,7 @@ export function drawLayer(ctx: Ctx2D, rawLayer: Layer, layerLocal: number, res: 
   const layer = clampResolved(resolveLayer(rawLayer, layerLocal));
   if (layer.opacity <= 0) return;
   const fx = layerEffects(layer, scale);
-  if (!fx.active) {
+  if (!fx.active && !needsGroupOpacity(layer)) {
     // No effects: exactly the v1 drawing (per-call opacity).
     ctx.save();
     ctx.globalAlpha *= Math.min(1, Math.max(0, layer.opacity));

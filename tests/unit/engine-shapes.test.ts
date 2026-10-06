@@ -439,6 +439,23 @@ describe('text outline and gradient', () => {
     expect(ops).toEqual(['strokeText:He', 'strokeText:llo', 'fillText:He', 'fillText:llo']);
   });
 
+  it('partly transparent outlined text is drawn as one group (opacity applied once, at the composite)', () => {
+    const faded = draw(text({ strokeWidth: 12, opacity: 0.5 }));
+    expect(faded.children).toHaveLength(1);
+    const composite = faded.log.findIndex((l) => l.startsWith('drawImage(["<canvas main.0>"'));
+    expect(faded.log.slice(0, composite)).toContain('globalAlpha=0.5');
+    const scratch = faded.children[0].log;
+    expect(scratch.some((l) => l.startsWith('globalAlpha='))).toBe(false);
+    expect(scratch.filter((l) => /^(strokeText|fillText)/.test(l))).toHaveLength(4);
+    // A fade (opacity keyframes): grouped while see-through, straight onto the canvas once opaque.
+    const fade = text({ strokeWidth: 12, keyframes: { opacity: [{ id: 'a', time: 0, value: 0, easing: { type: 'linear' } }, { id: 'b', time: 1, value: 1, easing: { type: 'linear' } }] } });
+    expect(draw(fade, 0.5).children).toHaveLength(1);
+    expect(draw(fade, 1.5).children).toHaveLength(0);
+    // Opaque outlined text, and see-through text without an outline, keep the direct (v1) path.
+    expect(draw(text({ strokeWidth: 12 })).children).toHaveLength(0);
+    expect(draw(text({ opacity: 0.5 })).children).toHaveLength(0);
+  });
+
   it('no outline and a solid colour: exactly the plain fill calls (v1)', () => {
     const log = draw(text()).log;
     expect(log.some((l) => /strokeText|lineJoin|createLinearGradient/.test(l))).toBe(false);

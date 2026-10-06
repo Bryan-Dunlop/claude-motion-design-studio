@@ -134,7 +134,8 @@ Playwright (real Chromium):
 - `RenderResources.createCanvas(w, h)` is the canvas factory hook used when no `canvasPool` is given (unit tests inject
   recording canvases); the order is pool → createCanvas → `createRenderCanvas`. `releaseAll()` runs in a `finally`.
 - Isolation applies only when an effect is active and the layer is multi-draw (`isMultiDraw` in renderFrame.ts). A2
-  (done, see below) added "a running text animator" there and gives each unit's own blur its own clip.
+  (done, see below) added "a running text animator" there and gives each unit's own blur its own clip. A3 also isolates
+  outlined text while it is partly transparent (`needsGroupOpacity`, see A3).
   A3: new shapes with acute corners are already covered by `inkBounds` (× miterLimit); text outline width is already in
   the text ink box and in `isMultiDraw`.
 - Scratch canvases are sized to the visible part of the layer plus its effect margin, rounded up to 64 px so the pool
@@ -302,7 +303,11 @@ ellipse — 12 o'clock; triangle / polygon / star — the top corner; line — t
 **Typography**: the same `Fill` Solid | Gradient rows for text (the gradient spans the whole text box; animated
 letters/words carry their part of it as they move), `Outline width` (◆) and, once it is > 0, `Outline` colour (◆).
 The outline is drawn *before* the fill with round joins, so it only shows outside the letters and never eats into
-them (or into a neighbouring letter while text animates).
+them (or into a neighbouring letter while text animates). While outlined text is partly see-through (e.g. half-way
+through a Fade preset or any opacity animation) it is drawn as one piece and faded as a whole, so the outline never
+shows through the letters. Letters that a *Text animation* style fades one by one fade their own outline and fill
+separately (like per-character opacity in After Effects), so with a thick contrasting outline the outline shows
+faintly inside each letter for the moment it is half-transparent.
 
 **Animation presets → Effect → Draw on**: animates the outline's End from 0 to 100 % (in) or 100 → 0 % (out) with the
 usual delay / duration / easing; re-applying replaces it. It is greyed out ("Select a shape to use Draw on") unless a
@@ -334,8 +339,10 @@ Unit (vitest) — `tests/unit/engine-shapes.test.ts`:
   exactly like v1; a fully trimmed one draws no outline*; *a line is stroke only …*; *gradient fill: one linear
   gradient across the layer box*; *a line with a drop shadow is a single draw (no scratch canvas) …*; text *outline:
   round joins, every line stroked before any line is filled*; *gradient across the text box*; *animated units: one
-  gradient for all of them, outlines of every unit before any fill*; *no outline and a solid colour: exactly the plain
-  fill calls*; determinism.
+  gradient for all of them, outlines of every unit before any fill*; *partly transparent outlined text is drawn as one
+  group (opacity applied once, at the composite)* (also through opacity keyframes; opaque outlined text and
+  see-through text without an outline keep the direct v1 path); *no outline and a solid colour: exactly the plain fill
+  calls*; determinism.
 - *inkBounds contains everything the new shapes paint* (7 setups × 3 render scales: acute/mirrored/trimmed shapes,
   square line ends, outlined gradient text) and *square line ends widen the box by √2 × half the width only where ends
   show*.
@@ -345,9 +352,13 @@ Playwright — `tests/e2e/engine-shapes.spec.ts`:
 
 - *trimmed outlines start where they should and run clockwise: ellipse at 12 o'clock, rect just after its top-left
   corner*; *a trim that wraps past the start point is continuous: no gap and no doubled overlap* (half-transparent
-  stroke: every sample across the start point = 128 ± 2); *a pill (r > h/2) trimmed to 50 % ends exactly opposite its
-  start* (the outline length agrees with Chromium's).
-- *text outline is drawn before the fill: no fill pixel is covered (the opposite order covers many)*.
+  stroke: every sample across the start point = 128 ± 2); *sharp start points: a star starts at its top tip clockwise,
+  and a trim wrapping across a star tip or a square corner keeps the sharp corner* (the miter at the start point is
+  there, as in the untrimmed outline; the same dash on an open copy of the path, i.e. two separate pieces, loses it);
+  *a pill (r > h/2) trimmed to 50 % ends exactly opposite its start* (the outline length agrees with Chromium's).
+- *text outline is drawn before the fill: no fill pixel is covered (the opposite order covers many)*;
+  *half-transparent outlined text is drawn as one group: the outline never shows through its letters* (compared with
+  the same text drawn call by call).
 - *gradient fill runs from From to To across the box at the angle*.
 - *export matches renderFrame: trimmed outlines, star, polygon, lines, gradient fills, outlined gradient text*.
 - UI: *Draw outline (trim): Add outline in one step, % fields with ◆, line ends while trimmed*; *Shape section: sides /
@@ -360,10 +371,23 @@ Playwright — `tests/e2e/engine-shapes.spec.ts`:
 - **Export vs renderFrame** (1920×1080, CRF 16; draw-on rect, gradient star, trimmed hexagon with moving offset, two
   lines, trimmed gradient ellipse with square ends, triangle, outlined gradient text): mean |diff| 0.81–0.87, PSNR
   40.9–42.5 dB (frames at 0.17, 0.5 and 0.9 s).
-- **Outline length vs Chromium**: a 50 % dash on rounded rects / pills (L = 937–4627 px) ends 0.2–0.5 px past the
-  exact half-way point (Skia measures arcs as slightly shorter polylines) — under 0.05 % of the outline.
+- **Outline length vs Chromium**: a 50 % dash on rounded rects / pills ends 0.19–0.49 px past the exact half-way point
+  (re-measured on six sizes, L = 937–4497 px, from the antialiased coverage along the bottom edge; Skia measures arcs
+  as slightly shorter polylines) — under 0.05 % of the outline.
+- **Wrap across a sharp start point** (16 px outline, butt ends, visible part 95 % → 105 %): the pixel inside the start
+  corner's miter is 255 for the untrimmed outline and for the wrapped trim (0 when the same dash runs on an open copy
+  of the path); within 20 px of the start point the wrapped trim differs from the untrimmed outline by ≤ 6 levels on a
+  star tip and 0 on a square corner (polygon / triangle measured ≤ 16 levels: antialiasing of the dashed path only).
+- **Trimmed vs untrimmed ellipse**: Skia strokes a dashed curve piece with its own approximation, so a trimmed
+  ellipse's outline edge can sit up to ~0.3 px off the untrimmed one (≤ 76 levels on edge pixels, not visible in
+  motion). The last frame of a "Draw on" (99.99 % dash → solid outline) changes 36 pixels by ≤ 10 levels: no pop.
 - **Text outline order**: 'Outline' at 130 px with a 16 px outline: 23 316 fully-filled pixels, 0 covered by the
   outline; drawing the fill first and the outline second would cover 17 814 of them.
+- **Half-transparent outlined text** (same text, blue on white, black 16 px outline, opacity 0.5): 0 of the 23 316
+  letter pixels differ from the same text without an outline (max 1 level); drawn call by call (outline at 50 %, then
+  the fill at 50 %, as before this was grouped) 17 602 of them did, by up to 64 levels.
+- **Suites at the end of A3**: typecheck clean; 205 unit tests (14 files); 51 Playwright tests in 1.9 min (13 of them
+  in `engine-shapes.spec.ts`, incl. one 1 s 1080p export); the A3 spec ran 3× in a row without a flake.
 - **v1 pixels**: a full ellipse fills identically from any start angle (0 bytes differ); a *closed* ellipse from −π/2
   also strokes identically to v1's unclosed 0 → 2π call (an unclosed −π/2 one differs at its seam: 7 pixels, ≤ 6
   levels of alpha). Untrimmed ellipses still keep v1's exact call (the v1-compat contract is about draw calls);
@@ -379,6 +403,9 @@ Playwright — `tests/e2e/engine-shapes.spec.ts`:
 - renderFrame: `drawShape` = traceShape → fill (solid/gradient; none for lines) → stroke with `lineCap` + dash only
   when trimmed (or a line). `drawText` / `drawTextUnits` set the fill (colour or one gradient in layer-box
   coordinates) and stroke all lines/units before filling. `isMultiDraw`: a line is single-draw.
+  `needsGroupOpacity`: outlined text with opacity < 1 takes the isolated path (`drawIsolated`, opacity applied once at
+  the composite) even without an effect — text outlines are new in v2, so no v1 file draws differently; outlined
+  *shapes* keep v1's per-call opacity (the v1-compat contract), and text-animator units keep their per-unit alpha.
 - inkBounds: square line ends add √2 × half the width (open lines, trimmed outlines); acute corners keep × miterLimit.
 - presets: `PresetKind` gains `draw`; `presetProps({kind:'draw'}) = ['trimEnd']`; `applyPreset` adds trimEnd 0 → 1.
 - UI: `FillRows` / `OptionSelect` in `props/engineFields.tsx`; `TrimSection` (exported from `ShapeSection.tsx`) is

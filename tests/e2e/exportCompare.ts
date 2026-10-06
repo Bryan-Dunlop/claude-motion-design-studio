@@ -130,18 +130,32 @@ export async function expectExportMatchesRender(
   return results;
 }
 
+export interface CliResult {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+}
+
 /**
  * Run the CLI renderer through node + tsx's CLI file (no bare `npx`, so it also works on Windows). Async with a
  * timeout shorter than the Playwright test timeout, so a hung render is reported instead of blocking the worker.
  */
-export function runRenderCli(args: string[], env: NodeJS.ProcessEnv = process.env, timeoutMs = 150_000): Promise<{ status: number | null; stdout: string; stderr: string }> {
+export function runRenderCli(args: string[], env: NodeJS.ProcessEnv = process.env, timeoutMs = 150_000): Promise<CliResult> {
+  return startRenderCli(args, env, timeoutMs).done;
+}
+
+/**
+ * Like runRenderCli, but returns at once with the running process and its output so far. `detached` (POSIX): the CLI
+ * gets its own process group, so a test can press Ctrl+C (SIGINT to the group) like a terminal does.
+ */
+export function startRenderCli(args: string[], env: NodeJS.ProcessEnv = process.env, timeoutMs = 150_000, opts: { detached?: boolean } = {}) {
   const tsxCli = path.resolve('node_modules/tsx/dist/cli.mjs');
-  return new Promise((resolve) => {
-    const child = spawn(process.execPath, [tsxCli, 'server/render-cli.ts', ...args], { env });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (d) => (stdout += d));
-    child.stderr.on('data', (d) => (stderr += d));
+  const child = spawn(process.execPath, [tsxCli, 'server/render-cli.ts', ...args], { env, detached: opts.detached });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (d) => (stdout += d));
+  child.stderr.on('data', (d) => (stderr += d));
+  const done = new Promise<CliResult>((resolve) => {
     const timer = setTimeout(() => {
       stderr += `\n[test] CLI render timed out after ${timeoutMs} ms`;
       child.kill('SIGKILL');
@@ -151,4 +165,5 @@ export function runRenderCli(args: string[], env: NodeJS.ProcessEnv = process.en
       resolve({ status, stdout, stderr });
     });
   });
+  return { child, done, output: () => stdout + stderr };
 }

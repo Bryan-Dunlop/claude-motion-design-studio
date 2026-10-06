@@ -1,4 +1,4 @@
-// Audio for the MP4 export: one ffmpeg input per audible clip, mixed in a filter graph next to the raw video on stdin.
+// Audio for the MP4 export: the audio files as ffmpeg inputs, mixed in a filter graph next to the raw video on stdin.
 // The command shape was verified on ffmpeg 6.1.1 (docs/v2-plan.md B1): adelay emits NOPTS timestamps, so the mix is
 // re-timed with asetpts=N/SR/TB and padded/cut to the exact video length in samples, which also stops an empty clip
 // from hanging the encoder.
@@ -7,8 +7,17 @@ import type { Asset, Project } from '../src/shared/schema';
 
 export const AUDIO_RATE = 48000;
 
+/**
+ * Clips of the same file share one ffmpeg input (through asplit) while their lengths add up to at most this many
+ * seconds. Sharing keeps the command short (1200 click sounds need a few inputs, not 1200), but asplit hands every clip
+ * its part of the file as soon as the file is read, so a clip that plays later holds its part in memory until then.
+ * Measured on ffmpeg 6.1 with a 30 s song looped 20 times: 61 MB with one input per clip, 523 MB with one shared input.
+ * So music and other long clips keep an input of their own, as before.
+ */
+export const SHARED_INPUT_SECONDS = 10;
+
 export interface AudioArgs {
-  /** `-i <file>` for every mixed clip, in input order (input 0 is the raw video on stdin). */
+  /** `-i <file>` per audio input, in input order (input 0 is the raw video on stdin). */
   inputs: string[];
   /** `-filter_complex <graph> -map 0:v -map [aout]`, or [] when nothing is audible. */
   filter: string[];
@@ -43,11 +52,34 @@ export function buildAudioArgs(project: Project, fileFor: (asset: Asset) => stri
   }
   if (clips.length === 0) return { inputs: [], filter: [], codec: [], warnings };
 
+  // Inputs in order of first use. A clip reads its input directly, or its own asplit output [a<clip>] when shared.
+  const groups: { file: string; clips: number[]; seconds: number }[] = [];
+  const open = new Map<string, (typeof groups)[number]>();
+  clips.forEach((c, i) => {
+    const file = fileOf(project.assets.find((a) => a.id === c.assetId)!)!;
+    let group = open.get(file);
+    if (!group || group.seconds + c.duration > SHARED_INPUT_SECONDS) {
+      group = { file, clips: [], seconds: 0 };
+      groups.push(group);
+      open.set(file, group);
+    }
+    group.clips.push(i);
+    group.seconds += c.duration;
+  });
   const inputs: string[] = [];
+  const source: string[] = [];
+  const splitBefore = new Map<number, string>();
+  groups.forEach((g, k) => {
+    inputs.push('-i', g.file);
+    if (g.clips.length === 1) source[g.clips[0]] = `${k + 1}:a`;
+    else {
+      for (const i of g.clips) source[i] = `a${i}`;
+      splitBefore.set(g.clips[0], `[${k + 1}:a]asplit=${g.clips.length}${g.clips.map((i) => `[a${i}]`).join('')}`);
+    }
+  });
+
   const chains: string[] = [];
   clips.forEach((c, i) => {
-    const asset = project.assets.find((a) => a.id === c.assetId)!;
-    inputs.push('-i', fileOf(asset)!);
     const f = [
       `atrim=start=${num(c.trimStart)}:duration=${num(c.duration)}`,
       'asetpts=PTS-STARTPTS',
@@ -58,7 +90,9 @@ export function buildAudioArgs(project: Project, fileFor: (asset: Asset) => stri
     if (c.fadeIn > 0) f.push(`afade=t=in:st=0:d=${num(c.fadeIn)}`);
     if (c.fadeOut > 0) f.push(`afade=t=out:st=${num(Math.max(0, c.duration - c.fadeOut))}:d=${num(c.fadeOut)}`);
     f.push(`adelay=${num(c.start * 1000)}:all=1`);
-    chains.push(`[${i + 1}:a]${f.join(',')}[c${i}]`);
+    const split = splitBefore.get(i);
+    if (split) chains.push(split);
+    chains.push(`[${source[i]}]${f.join(',')}[c${i}]`);
   });
   // The audio length is the VIDEO length (whole frames), not durationSec.
   const ns = Math.round(videoEnd(project) * AUDIO_RATE);

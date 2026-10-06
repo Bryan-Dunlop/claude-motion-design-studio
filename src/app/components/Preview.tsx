@@ -1,20 +1,27 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { resolveLayer } from '../../shared/interpolate';
-import {
-  activeScenes,
-  applyMatrix,
-  cursorPosition,
-  invertMatrix,
-  isLayerActive,
-  layerBox,
-  layerMatrix,
-  renderFrame,
-} from '../../shared/renderFrame';
+import { activeScenes, applyMatrix, cursorPosition, isLayerActive, layerBox, layerMatrix, renderFrame } from '../../shared/renderFrame';
 import type { CursorLayer, CursorPoint, Layer, Project, Scene } from '../../shared/schema';
-import { startDrag } from '../drag';
-import { useResources } from '../resources';
-import { currentValue, findLayer, setProp, useEditor } from '../store';
 import { importFiles } from '../actions';
+import { startDrag } from '../drag';
+import { usePrefs } from '../prefs';
+import { useResources } from '../resources';
+import {
+  boundsOf,
+  boxFromPoints,
+  distToSegment,
+  guideLines,
+  hitPolygon,
+  moveTargets,
+  polygonIntersectsBox,
+  safeArea,
+  SNAP_PX,
+  snapMove,
+  unionBox,
+  type Box,
+  type Pt,
+} from '../snapping';
+import { currentValue, findLayer, setProp, useEditor } from '../store';
 
 const measureCtx = document.createElement('canvas').getContext('2d')!;
 
@@ -55,10 +62,62 @@ function visibleLayers(project: Project, time: number): Placed[] {
   return out;
 }
 
-function hitTest(p: Placed, x: number, y: number): boolean {
-  const [lx, ly] = applyMatrix(invertMatrix(p.matrix), x, y);
-  const pad = 4;
-  return lx >= -pad && ly >= -pad && lx <= p.box.w + pad && ly <= p.box.h + pad;
+/**
+ * Is project point `pt` on this layer? `pad` is the forgiveness around its outline in project px (6 screen px, at
+ * least 4). A line shape is hit near its segment (half its stroke width or 6 screen px).
+ */
+function hitTest(p: Placed, pt: Pt, pad: number, linePad: number): boolean {
+  const r = p.resolved;
+  if (r.type === 'shape' && r.shape === 'line') {
+    const a = applyMatrix(p.matrix, 0, p.box.h / 2);
+    const b = applyMatrix(p.matrix, p.box.w, p.box.h / 2);
+    return distToSegment(pt, a, b) <= Math.max((r.strokeWidth * Math.abs(r.scale)) / 2, linePad);
+  }
+  return hitPolygon(pt, p.corners, pad);
+}
+
+/** Centre lines, thirds and the format's safe box (Guides toggle). Drawn over the preview only, never exported. */
+function GuidesOverlay({ W, H, fit }: { W: number; H: number; fit: number }) {
+  const g = guideLines(W, H);
+  const safe = safeArea(W, H);
+  const b = safe.box;
+  return (
+    <g className="guides" data-testid="guides-overlay">
+      {safe.kind === 'reels' && (
+        <>
+          {/* Hatch the parts the app's buttons and captions cover. */}
+          <defs>
+            <pattern id="reels-hatch" patternUnits="userSpaceOnUse" width={10 / fit} height={10 / fit} patternTransform="rotate(45)">
+              <line x1={0} y1={0} x2={0} y2={10 / fit} className="reels-hatch-line" vectorEffect="non-scaling-stroke" />
+            </pattern>
+          </defs>
+          <path className="safe-shade" fillRule="evenodd" d={`M0 0H${W}V${H}H0Z M${b.left} ${b.top}V${b.bottom}H${b.right}V${b.top}Z`} />
+        </>
+      )}
+      {g.x.map((x) => (
+        <line key={`x${x}`} x1={x} y1={0} x2={x} y2={H} className="guide-third" vectorEffect="non-scaling-stroke" />
+      ))}
+      {g.y.map((y) => (
+        <line key={`y${y}`} x1={0} y1={y} x2={W} y2={y} className="guide-third" vectorEffect="non-scaling-stroke" />
+      ))}
+      <line x1={g.centreX} y1={0} x2={g.centreX} y2={H} className="guide-centre" vectorEffect="non-scaling-stroke" />
+      <line x1={0} y1={g.centreY} x2={W} y2={g.centreY} className="guide-centre" vectorEffect="non-scaling-stroke" />
+      <rect
+        x={b.left}
+        y={b.top}
+        width={b.right - b.left}
+        height={b.bottom - b.top}
+        className={`safe-box ${safe.kind}`}
+        vectorEffect="non-scaling-stroke"
+        data-testid="safe-box"
+        data-kind={safe.kind}
+      />
+      <text x={b.left + 6 / fit} y={b.top + 15 / fit} fontSize={11 / fit} className="safe-label" data-testid="safe-label">
+        <title>{safe.tip}</title>
+        {safe.label}
+      </text>
+    </g>
+  );
 }
 
 export function Preview() {
@@ -70,6 +129,9 @@ export function Preview() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [size, setSize] = useState({ w: 800, h: 450 });
   const [dragOver, setDragOver] = useState(false);
+  const [marquee, setMarquee] = useState<Box | null>(null);
+  const [snapLines, setSnapLines] = useState<{ x: number[]; y: number[] } | null>(null);
+  const guidesOn = usePrefs((s) => s.guides);
   const { width: W, height: H } = project.settings;
 
   useLayoutEffect(() => {
@@ -104,13 +166,10 @@ export function Preview() {
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
-    const [x, y] = toProject(e);
-    const hit = [...placed].reverse().find((p) => !p.layer.locked && hitTest(p, x, y));
+    const pt = toProject(e);
+    const hit = [...placed].reverse().find((p) => !p.layer.locked && hitTest(p, pt, Math.max(4, 6 / fit), 6 / fit));
     const st = useEditor.getState();
-    if (!hit) {
-      st.select({ layerIds: [] });
-      return;
-    }
+    if (!hit) return startMarquee(e, pt);
     let ids = st.selection.layerIds;
     const wasSelected = ids.includes(hit.layer.id);
     if (e.shiftKey && !wasSelected) ids = [...ids, hit.layer.id];
@@ -119,6 +178,27 @@ export function Preview() {
     // Shift-click on a selected layer removes it, but only if it was a click, not a Shift-constrained drag.
     startMove(e, ids, (moved) => {
       if (!moved && e.shiftKey && wasSelected) useEditor.getState().select({ layerIds: ids.filter((i) => i !== hit.layer.id) });
+    });
+  };
+
+  /** Drag on empty space: select the (unlocked) layers the rectangle touches. Shift adds to the selection. */
+  const startMarquee = (e: React.PointerEvent, from: Pt) => {
+    const st = useEditor.getState();
+    const base = e.shiftKey ? st.selection.layerIds : [];
+    if (!e.shiftKey) st.select({ layerIds: [] });
+    const candidates = placed.filter((p) => !p.layer.locked);
+    startDrag(e, {
+      history: false,
+      onMove: (_dx, _dy, ev) => {
+        const box = boxFromPoints(from, toProject(ev));
+        setMarquee(box);
+        const hits = candidates.filter((p) => polygonIntersectsBox(p.corners, box));
+        const ids = [...new Set([...base, ...hits.map((p) => p.layer.id)])];
+        const cur = useEditor.getState().selection;
+        if (ids.length === cur.layerIds.length && ids.every((id, i) => cur.layerIds[i] === id)) return;
+        useEditor.getState().select({ sceneId: hits[0]?.scene.id ?? cur.sceneId, layerIds: ids });
+      },
+      onEnd: () => setMarquee(null),
     });
   };
 
@@ -135,14 +215,31 @@ export function Preview() {
         points: layer.type === 'cursor' ? layer.points.map((p) => ({ ...p })) : null,
       }));
     const k = W / canvasRef.current!.getBoundingClientRect().width;
+    // Snapping: the moved layers' bounds against the frame, the other visible layers and (with guides) the safe box.
+    const movingIds = new Set(origins.map((o) => o.id));
+    const startBox = unionBox(placed.filter((p) => movingIds.has(p.layer.id)).map((p) => boundsOf(p.corners)));
+    const others = placed.filter((p) => !movingIds.has(p.layer.id)).map((p) => boundsOf(p.corners));
+    const targets = moveTargets({ width: W, height: H }, others, usePrefs.getState().guides ? safeArea(W, H).box : null);
     startDrag(e, {
       onMove: (dx, dy, ev) => {
         let mx = dx * k;
         let my = dy * k;
+        const lock = { x: false, y: false };
         if (ev.shiftKey) {
-          if (Math.abs(mx) > Math.abs(my)) my = 0;
-          else mx = 0;
+          if (Math.abs(mx) > Math.abs(my)) {
+            my = 0;
+            lock.y = true;
+          } else {
+            mx = 0;
+            lock.x = true;
+          }
         }
+        if (startBox && usePrefs.getState().snap && !ev.ctrlKey && !ev.metaKey) {
+          const s = snapMove(startBox, mx, my, targets, SNAP_PX * k, lock);
+          mx = s.dx;
+          my = s.dy;
+          setSnapLines(s.guidesX.length || s.guidesY.length ? { x: s.guidesX, y: s.guidesY } : null);
+        } else setSnapLines(null);
         useEditor.getState().updateGesture((d) => {
           for (const o of origins) {
             if (o.points) {
@@ -155,7 +252,10 @@ export function Preview() {
           }
         });
       },
-      onEnd,
+      onEnd: (moved) => {
+        setSnapLines(null);
+        onEnd?.(moved);
+      },
     });
   };
 
@@ -229,6 +329,7 @@ export function Preview() {
     <div
       className={`preview ${dragOver ? 'drag-over' : ''}`}
       ref={wrapRef}
+      onPointerDown={onPointerDown}
       onDragOver={(e) => {
         e.preventDefault();
         setDragOver(true);
@@ -242,7 +343,8 @@ export function Preview() {
     >
       <div className="stage" style={{ width: cssW, height: cssH }}>
         <canvas ref={canvasRef} data-testid="preview-canvas" style={{ width: cssW, height: cssH }} />
-        <svg className="overlay" viewBox={`0 0 ${W} ${H}`} width={cssW} height={cssH} onPointerDown={onPointerDown} data-testid="preview-overlay">
+        <svg className="overlay" viewBox={`0 0 ${W} ${H}`} width={cssW} height={cssH} data-testid="preview-overlay">
+          {guidesOn && <GuidesOverlay W={W} H={H} fit={fit} />}
           {selected.map((p) => (
             <polygon key={p.layer.id} points={p.corners.map((c) => c.join(',')).join(' ')} className="sel-outline" vectorEffect="non-scaling-stroke" />
           ))}
@@ -283,12 +385,29 @@ export function Preview() {
             </>
           )}
           {single && single.layer.type === 'cursor' && <CursorPath layer={single.layer} hs={hs} onPointDown={startPointDrag} />}
+          {snapLines?.x.map((x) => (
+            <line key={`sx${x}`} x1={x} y1={0} x2={x} y2={H} className="snap-line" vectorEffect="non-scaling-stroke" data-testid="snap-guide" data-axis="x" data-pos={x} />
+          ))}
+          {snapLines?.y.map((y) => (
+            <line key={`sy${y}`} x1={0} y1={y} x2={W} y2={y} className="snap-line" vectorEffect="non-scaling-stroke" data-testid="snap-guide" data-axis="y" data-pos={y} />
+          ))}
+          {marquee && (
+            <rect
+              className="marquee"
+              x={marquee.left}
+              y={marquee.top}
+              width={marquee.right - marquee.left}
+              height={marquee.bottom - marquee.top}
+              vectorEffect="non-scaling-stroke"
+              data-testid="marquee"
+            />
+          )}
         </svg>
-        {dragOver && <div className="drop-hint">Drop PNG, JPG, WebP, SVG or font files</div>}
+        {dragOver && <div className="drop-hint">Drop images (PNG, JPG, WebP, SVG), fonts or sounds (MP3, WAV, OGG, M4A, AAC, FLAC)</div>}
       </div>
       {project.scenes.length === 0 && (
         <div className="empty-hint">
-          Empty project. Add a scene, text, shape or cursor from the toolbar, or drop images here.
+          Empty project. Add a scene, text, shape or cursor from the toolbar, or drop images or sounds here.
         </div>
       )}
     </div>

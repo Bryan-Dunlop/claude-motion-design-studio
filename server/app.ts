@@ -7,7 +7,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { createServer as createViteServer } from 'vite';
-import { acceptFrame, cancel, fail, ffmpegAvailable, finishFrames, getJob, publicJob, startExport, FFMPEG_HELP } from './exporter';
+import { exportFileName, exportSize, parseExportOptions } from '../src/shared/exportSize';
+import { decodeAudioInfo } from './audioDecode';
+import { acceptFrame, cancel, fail, ffmpegAvailable, finishFrames, freeOutFile, getJob, publicJob, startExport, FFMPEG_HELP } from './exporter';
+import { isIgnoredFolder, isInside } from './paths';
 import { HttpError, parseProject, sanitizeName, Workspace } from './projects';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -43,8 +46,9 @@ export async function startServer(opts: { port: number; workspace: string; host?
   app.get('/api/projects/:name', wrap((req, res) => {
     res.json({ name: sanitizeName(param(req, 'name')), project: ws.read(param(req, 'name')) });
   }));
+  /** ?from=<name>: the project it was opened as (Save as…), whose folder holds assets that may not be in scratch. */
   app.put('/api/projects/:name', json, wrap((req, res) => {
-    const project = ws.save(param(req, 'name'), req.body);
+    const project = ws.save(param(req, 'name'), req.body, req.query.from ? String(req.query.from) : undefined);
     res.json({ name: sanitizeName(param(req, 'name')), project });
   }));
 
@@ -55,12 +59,25 @@ export async function startServer(opts: { port: number; workspace: string; host?
     res.json(ws.storeScratch(req.body, filename));
   }));
   /** ?project=<name>&path=<relativePath>&hash=<sha256> */
-  app.get('/api/asset', wrap((req, res) => {
+  const assetFile = (req: Request) => {
     const name = String(req.query.project ?? '');
     const dir = name ? ws.projectDir(name) : null;
     const file = ws.resolveAsset(dir, { relativePath: String(req.query.path ?? ''), hash: String(req.query.hash ?? '') });
     if (!file) throw new HttpError(404, 'Asset missing');
-    res.sendFile(file, { dotfiles: 'allow', headers: { 'Cache-Control': 'no-cache' } });
+    return file;
+  };
+  app.get('/api/asset', wrap((req, res) => {
+    res.sendFile(assetFile(req), { dotfiles: 'allow', headers: { 'Cache-Control': 'no-cache' } });
+  }));
+  /** Length + waveform peaks of an audio asset, decoded by ffmpeg (for formats the browser can't decode). Same query. */
+  app.get('/api/audio-info', wrap(async (req, res) => {
+    const file = assetFile(req);
+    if (!ffmpegAvailable()) throw new HttpError(424, FFMPEG_HELP);
+    try {
+      res.json(await decodeAudioInfo(file));
+    } catch (e) {
+      throw new HttpError(422, `Could not decode this audio file: ${(e as Error).message}`);
+    }
   }));
 
   // ---------------------------------------------------------------- zip
@@ -79,13 +96,22 @@ export async function startServer(opts: { port: number; workspace: string; host?
   }));
 
   // ---------------------------------------------------------------- export
+  /** Body: { project, name?, scale?, crf?, preset?, audio? } — every export option is optional (ExportOptionsSchema). */
   app.post('/api/export', json, wrap(async (req, res) => {
     const project = parseProject(req.body.project);
+    const parsed = parseExportOptions(req.body ?? {});
+    if (!parsed.ok) throw new HttpError(400, `Invalid export options: ${parsed.error}`);
+    const options = parsed.options;
     const name = req.body.name ? sanitizeName(String(req.body.name)) : '';
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const outFile = path.join(ws.exports, `${name || 'untitled'}-${stamp}.mp4`);
+    const { outW, outH } = exportSize(project.settings, options.scale);
+    const now = new Date();
+    // Two exports in the same second would otherwise share (and overwrite) one file.
+    const outFile = freeOutFile(ws.exports, (n) => exportFileName(name, outW, outH, now, n));
+    const projectDir = name ? ws.projectDir(name) : null;
     try {
-      const job = await startExport({ project, projectDir: name ? ws.projectDir(name) : null, outFile, baseUrl });
+      const job = await startExport({ project, projectDir, outFile, baseUrl, options, resolveAsset: (a) => ws.resolveAsset(projectDir, a) });
+      // Failures also go to the server log (the dialog shows them too); cancelling is not a failure.
+      job.finished.catch((err: Error) => job.status === 'error' && console.error(`[export] ${path.basename(outFile)} failed: ${err.message}`));
       res.json(publicJob(job));
     } catch (e) {
       const err = e as Error & { status?: number };
@@ -108,8 +134,11 @@ export async function startServer(opts: { port: number; workspace: string; host?
     if (job.status !== 'done') throw new HttpError(409, 'Export not finished');
     res.download(job.outFile, path.basename(job.outFile), { dotfiles: 'allow' });
   }));
-  // Used by render.html running inside headless Chromium.
-  app.get('/api/jobs/:id/project', wrap((req, res) => res.json({ project: jobOr404(req).project })));
+  // Used by render.html running inside headless Chromium: the project and the output frame size + renderFrame scale.
+  app.get('/api/jobs/:id/project', wrap((req, res) => {
+    const job = jobOr404(req);
+    res.json({ project: job.project, ...job.size });
+  }));
   app.get('/api/jobs/:id/asset/:assetId', wrap((req, res) => {
     const job = jobOr404(req);
     const asset = job.project.assets.find((a) => a.id === param(req, 'assetId'));
@@ -137,9 +166,10 @@ export async function startServer(opts: { port: number; workspace: string; host?
   }));
 
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
-  app.use((err: Error & { status?: number }, _req: Request, res: Response, next: NextFunction) => {
+  app.use((err: Error & { status?: number }, req: Request, res: Response, next: NextFunction) => {
     if (res.headersSent) return next(err);
     const status = err instanceof HttpError ? err.status : err.status && err.status < 600 ? err.status : 500;
+    if (status >= 500) console.error(`[server] ${req.method} ${req.path} failed: ${err.stack ?? err.message}`);
     res.status(status).json({ error: err.message });
   });
 
@@ -159,7 +189,7 @@ export async function startServer(opts: { port: number; workspace: string; host?
         hmr: opts.hmr === false ? false : { server: httpServer },
         ws: opts.hmr === false ? false : undefined,
         // A function, not a glob: absolute paths can contain glob characters (e.g. "C:\\Users\\Me (Work)").
-        watch: { ignored: [(p: string) => isInside(p, ws.root) || /[\\/](test-results|\.e2e-workspace|\.vite)([\\/]|$)/.test(p)] },
+        watch: { ignored: [(p: string) => isInside(p, ws.root) || isIgnoredFolder(p)] },
       },
       appType: 'mpa',
       logLevel: 'warn',
@@ -183,11 +213,4 @@ export async function startServer(opts: { port: number; workspace: string; host?
       await closeVite();
     },
   };
-}
-
-function isInside(p: string, dir: string): boolean {
-  const norm = (x: string) => path.resolve(x).replace(/\\/g, '/').toLowerCase();
-  const a = norm(p);
-  const b = norm(dir);
-  return a === b || a.startsWith(b + '/');
 }

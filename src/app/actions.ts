@@ -3,8 +3,12 @@ import type { Draft } from 'immer';
 import { assetUrl } from '../shared/assetUrl';
 import { makeId } from '../shared/presets';
 import { makeLayer, makeScene } from '../shared/factories';
+import { aspectOf, formatSize } from '../shared/fitToFrame';
 import { safeFileName } from '../shared/names';
-import { ASPECTS, emptyProject, ProjectSchema, type Asset, type Layer, type Project, type Scene, type Settings, type ShapeKind } from '../shared/schema';
+import { emptyProject, ProjectSchema, type Asset, type AudioClip, type Layer, type Project, type Scene, type Settings, type ShapeKind } from '../shared/schema';
+import { clockLabel, duplicateClipsAt, newClip } from './audio/clips';
+import { loadAudioInfo } from './audio/waveform';
+import { copyClips, copyKeys, copyLayers, pasteClips, pasteKeys, pasteKeysMessage, pasteLayers, type Clipboard, type CopiedKey, type PasteKeysResult } from './clipboard';
 import { deepCloneLayer, findLayer, useEditor } from './store';
 
 const S = () => useEditor.getState();
@@ -265,30 +269,97 @@ export function moveLayer(id: string, delta: -1 | 1) {
   });
 }
 
+// ---------------------------------------------------------------- keyframes
+
+/** Delete keyframes (one undo step); the layers stay. A property left without keyframes keeps its static value. */
+export function deleteKeys(ids: readonly string[]) {
+  if (!ids.length) return;
+  const gone = new Set(ids);
+  S().commit((d) => {
+    for (const scene of d.scenes)
+      for (const layer of scene.layers)
+        for (const [prop, keys] of Object.entries(layer.keyframes)) {
+          if (!keys.some((k) => gone.has(k.id))) continue;
+          const kept = keys.filter((k) => !gone.has(k.id));
+          if (kept.length) layer.keyframes[prop] = kept;
+          else delete layer.keyframes[prop];
+        }
+  });
+  S().selectKeys([]);
+}
+
+// ---------------------------------------------------------------- clipboard (Ctrl+C / Ctrl+V)
+
+/** In-memory clipboard (plain cloned data; survives opening another project). */
+let clipboard: Clipboard | null = null;
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+/** Ctrl+C: the selected keyframes if there are any, else the selected audio clips, else the selected layers. */
+export function copySelection(): boolean {
+  const { project, selection, selectedKeys } = S();
+  if (selectedKeys.length) {
+    const keys = copyKeys(project, selectedKeys);
+    clipboard = { kind: 'keys', keys };
+    S().toast(`Copied ${plural(keys.length, 'keyframe')}. Select a layer and press Ctrl+V to paste them at the playhead.`);
+  } else if (selection.audioIds.length) {
+    const clip = copyClips(project, selection.audioIds);
+    clipboard = clip;
+    S().toast(`Copied ${plural(clip.clips.length, 'audio clip')}. Ctrl+V pastes at the playhead.`);
+  } else if (selection.layerIds.length) {
+    const clip = copyLayers(project, selection.layerIds);
+    clipboard = clip;
+    S().toast(`Copied ${plural(clip.layers.length, 'layer')}. Ctrl+V pastes into the selected scene.`);
+  } else return false;
+  return true;
+}
+
+/**
+ * Ctrl+V: paste what was copied, as one undo step, and select it. Keyframes go onto every selected layer at the
+ * playhead (x/y relative to where each layer is; `absolute` = Ctrl+Shift+V keeps the copied values); layers go into
+ * the selected scene at the same timing; clips go to the playhead.
+ */
+export function pasteClipboard(opts: { absolute?: boolean } = {}) {
+  const clip = clipboard;
+  if (!clip) return S().toast('Nothing to paste yet: select keyframes, layers or audio clips and press Ctrl+C first.');
+  if (clip.kind === 'keys') return pasteKeyframes(clip.keys, !opts.absolute);
+  if (clip.kind === 'clips') {
+    let ids: string[] = [];
+    const at = S().time;
+    S().commit((d) => void (ids = pasteClips(d, clip, at, () => makeId('clip'))));
+    S().select({ audioIds: ids });
+    return;
+  }
+  const existing = targetSceneId();
+  const created = existing ? null : newScene(S().project);
+  const sceneId = existing ?? created!.id;
+  let ids: string[] = [];
+  S().commit((d) => {
+    if (created) d.scenes.push(created);
+    ids = pasteLayers(d, sceneId, clip);
+  });
+  S().select({ sceneId, layerIds: ids, audioIds: [] });
+  if (created) showScene(created);
+}
+
+function pasteKeyframes(keys: CopiedKey[], relative: boolean) {
+  const { selection, time } = S();
+  if (!selection.layerIds.length) return S().toast('Select the layer(s) to paste the keyframes onto.');
+  let r: PasteKeysResult = { ids: [], skipped: 0, skippedTypes: [], refused: [] };
+  S().commit((d) => void (r = pasteKeys(d, selection.layerIds, keys, time, { relative, newId: () => makeId('kf') })));
+  if (r.ids.length) S().selectKeys(r.ids);
+  S().toast(pasteKeysMessage(r), r.ids.length ? 'info' : 'error');
+}
+
 // ---------------------------------------------------------------- settings
 
 export function updateSettings(patch: Partial<Settings>) {
   S().commit((d) => {
     const st = d.settings;
     Object.assign(st, patch);
-    if (patch.aspect && patch.aspect !== 'custom') {
-      // Keep the long edge, change the ratio.
-      const [aw, ah] = ASPECTS[patch.aspect];
-      const long = Math.max(st.width, st.height);
-      if (aw >= ah) {
-        st.width = long;
-        st.height = Math.round((long * ah) / aw / 2) * 2;
-      } else {
-        st.height = long;
-        st.width = Math.round((long * aw) / ah / 2) * 2;
-      }
-    }
-    if (patch.width !== undefined || patch.height !== undefined) {
-      if (!patch.aspect) {
-        const match = Object.entries(ASPECTS).find(([, [aw, ah]]) => Math.abs(st.width / st.height - aw / ah) < 0.002);
-        st.aspect = (match?.[0] as Settings['aspect']) ?? 'custom';
-      }
-    }
+    // A new aspect keeps the long edge and changes the ratio.
+    if (patch.aspect && patch.aspect !== 'custom') Object.assign(st, formatSize(st, patch.aspect));
+    if ((patch.width !== undefined || patch.height !== undefined) && !patch.aspect) st.aspect = aspectOf(st.width, st.height);
     // Layers are never deleted by a settings change.
   });
   const { time, project } = S();
@@ -302,13 +373,23 @@ async function sha256Hex(buf: ArrayBuffer) {
   return [...new Uint8Array(h)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+/** File types the importer accepts (also the file inputs' `accept` lists). */
+export const IMAGE_EXTS = '.png,.jpg,.jpeg,.webp,.svg';
+export const FONT_EXTS = '.ttf,.otf,.woff,.woff2';
+export const AUDIO_EXTS = '.mp3,.wav,.ogg,.m4a,.aac,.flac';
+export const IMPORT_ACCEPT = `${IMAGE_EXTS},${FONT_EXTS},${AUDIO_EXTS}`;
+
 function classify(file: File): Asset['type'] | null {
   const n = file.name.toLowerCase();
   if (/\.(png|jpe?g|webp)$/.test(n)) return 'image';
   if (/\.svg$/.test(n)) return 'svg';
   if (/\.(ttf|otf|woff2?)$/.test(n)) return 'font';
+  if (/\.(mp3|wav|ogg|m4a|aac|flac)$/.test(n)) return 'audio';
   return null;
 }
+
+/** Images and SVGs can replace each other; fonts and sounds only their own kind. */
+const kindOf = (t: Asset['type']) => (t === 'svg' ? 'image' : t);
 
 async function imageSize(url: string): Promise<{ width: number; height: number } | null> {
   const img = new Image();
@@ -324,7 +405,7 @@ async function imageSize(url: string): Promise<{ width: number; height: number }
 /** Upload original bytes (unmodified) and describe them as an Asset. */
 async function uploadFile(file: File, keepId?: string): Promise<Asset> {
   const type = classify(file);
-  if (!type) throw new Error(`${file.name}: unsupported file type (use PNG, JPG, WebP, SVG, TTF, OTF, WOFF, WOFF2)`);
+  if (!type) throw new Error(`${file.name}: unsupported file type (use PNG, JPG, WebP, SVG, TTF, OTF, WOFF, WOFF2, MP3, WAV, OGG, M4A, AAC or FLAC)`);
   const bytes = await file.arrayBuffer();
   const { hash } = await api<{ hash: string }>('/api/assets', {
     method: 'POST',
@@ -336,6 +417,11 @@ async function uploadFile(file: File, keepId?: string): Promise<Asset> {
   const asset: Asset = { id: keepId ?? makeId('asset'), originalName: file.name, relativePath: `assets/${hash.slice(0, 8)}-${safe}`, type, hash };
   if (type === 'font') {
     asset.fontFamily = file.name.replace(/\.[^.]+$/, '').replace(/[^\w\- ]+/g, ' ').trim() || 'Imported font';
+  } else if (type === 'audio') {
+    // Never through imageSize(): length (+ waveform peaks, cached) from a low-rate decode, or ffmpeg on the server.
+    const info = await loadAudioInfo(asset, null, bytes);
+    if (!info || !(info.duration > 0.001)) throw new Error(`${file.name}: could not read this audio file`);
+    asset.duration = Math.round(info.duration * 1e6) / 1e6;
   } else {
     const size = await imageSize(assetUrl(null, asset));
     if (!size) throw new Error(`${file.name}: could not decode image`);
@@ -350,6 +436,10 @@ export async function importFiles(files: File[]) {
       const asset = await uploadFile(file);
       const existing = S().project.assets.find((a) => a.hash === asset.hash);
       const use = existing ?? asset;
+      if (use.type === 'audio') {
+        addClip(use, { newAsset: existing ? undefined : asset });
+        continue;
+      }
       if (!existing) S().commit((d) => void d.assets.push(asset));
       if (use.type === 'font') S().toast(`Font "${use.fontFamily}" added — pick it in a text layer's Font menu.`);
       else addImageLayer(use);
@@ -359,11 +449,55 @@ export async function importFiles(files: File[]) {
   }
 }
 
+// ---------------------------------------------------------------- audio clips
+
+/**
+ * Add a clip of an audio asset (new-clip defaults in audio/clips.ts) and select it. With `newAsset`, the asset is
+ * added in the same undo step. `atPlayhead` always places it at the playhead ("+ at playhead").
+ */
+export function addClip(asset: Asset, opts: { newAsset?: Asset; atPlayhead?: boolean } = {}) {
+  const { project, time } = S();
+  const clip = newClip(asset, project, time, makeId('clip'), { atPlayhead: opts.atPlayhead });
+  S().commit((d) => {
+    if (opts.newAsset) d.assets.push(opts.newAsset);
+    d.audio.push(clip);
+  });
+  S().select({ audioIds: [clip.id] });
+  S().toast(`Added ${asset.originalName} at ${clockLabel(clip.start)} — see the Audio rows`);
+  return clip.id;
+}
+
+/** Change clips in one undo step. */
+export function updateClips(ids: string[], recipe: (clip: Draft<AudioClip>) => void) {
+  S().commit((d) => {
+    for (const c of d.audio) if (ids.includes(c.id)) recipe(c);
+  });
+}
+
+export function deleteClips(ids: string[]) {
+  if (!ids.length) return;
+  S().commit((d) => {
+    d.audio = d.audio.filter((c) => !ids.includes(c.id));
+  });
+  S().select({ audioIds: [] });
+}
+
+/** Ctrl+D: copies of the selected clips, the earliest at the playhead (others keep their spacing). */
+export function duplicateClips(ids: string[]) {
+  const { project, time } = S();
+  const copies = duplicateClipsAt(project.audio, ids, time, () => makeId('clip'));
+  if (!copies.length) return;
+  S().commit((d) => void d.audio.push(...copies));
+  S().select({ audioIds: copies.map((c) => c.id) });
+}
+
 /** Point an existing asset id at a new file; layers using it keep working. */
 export async function relinkAsset(assetId: string, file: File) {
   try {
     const old = S().project.assets.find((a) => a.id === assetId);
     if (!old) return;
+    const type = classify(file);
+    if (type && kindOf(type) !== kindOf(old.type)) throw new Error(`${file.name}: pick a ${kindOf(old.type) === 'audio' ? 'sound' : kindOf(old.type)} file to replace ${old.originalName}`);
     const asset = await uploadFile(file, assetId);
     if (old.type === 'font') asset.fontFamily = old.fontFamily;
     S().commit((d) => {
@@ -382,18 +516,40 @@ export async function listProjects() {
   return api<{ name: string; modified: number }[]>('/api/projects');
 }
 
+/**
+ * Write a project folder. When saving under another name than the open project (Save as…, format copies), the server
+ * is told where it came from (`from`): assets of an opened or imported project may exist only in its own folder.
+ */
+function putProject(name: string, project: Project) {
+  const from = S().projectName;
+  const q = from && from !== name ? `?from=${encodeURIComponent(from)}` : '';
+  return api<{ name: string; project: Project }>(`/api/projects/${encodeURIComponent(name)}${q}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(project),
+  });
+}
+
 export async function saveProject(name?: string): Promise<boolean> {
   const target = name ?? S().projectName;
   if (!target) return false;
   try {
     const project = S().project;
-    const r = await api<{ name: string }>(`/api/projects/${encodeURIComponent(target)}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(project),
-    });
+    const r = await putProject(target, project);
     S().markSaved(project, r.name);
     S().toast(`Saved ${r.name}.motion`);
+    return true;
+  } catch (e) {
+    S().toast(`Save failed: ${(e as Error).message}`, 'error');
+    return false;
+  }
+}
+
+/** Save `copy` as a new project called `name` and open it (Make a copy in another format…). */
+export async function saveCopyAs(copy: Project, name: string): Promise<boolean> {
+  try {
+    const r = await putProject(name, copy);
+    S().loadProject(ProjectSchema.parse(r.project), r.name);
     return true;
   } catch (e) {
     S().toast(`Save failed: ${(e as Error).message}`, 'error');

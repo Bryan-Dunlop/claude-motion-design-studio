@@ -2,11 +2,13 @@ import { makeId } from '../../../shared/presets';
 import { cursorPosition } from '../../../shared/renderFrame';
 import type { CursorLayer, Scene } from '../../../shared/schema';
 import { findLayer, useEditor } from '../../store';
-import { ColorField, NumberField, Row, Section } from '../Fields';
+import { ColorField, NumberField, Row, Section, Select } from '../Fields';
 
 export function CursorPanel({ layer, scene }: { layer: CursorLayer; scene: Scene }) {
   const commit = useEditor((s) => s.commit);
   const time = useEditor((s) => s.time);
+  const assets = useEditor((s) => s.project.assets);
+  const sounds = assets.filter((a) => a.type === 'audio');
   const local = Math.min(Math.max(0, layer.duration > 0 ? time - scene.start - layer.start : 0), layer.duration);
   const edit = (fn: (l: CursorLayer) => void) =>
     commit((d) => {
@@ -77,6 +79,29 @@ export function CursorPanel({ layer, scene }: { layer: CursorLayer; scene: Scene
       <button title="Add a click (press + ripple) at the playhead time" onClick={() => edit((l) => void l.clicks.push({ id: makeId('click'), time: Math.round(local * 100) / 100 }))}>
         + Click at playhead
       </button>
+      <Row label="Click sound" tip="A sound played at every click (one per click; it follows the clicks when you move them). Import a sound file first.">
+        <Select
+          value={layer.clickSound?.assetId ?? ''}
+          testId="cursor-click-sound"
+          tip="Sound played at every click"
+          options={[{ value: '', label: sounds.length ? 'None' : 'None (import a sound first)' }, ...sounds.map((a) => ({ value: a.id, label: a.originalName }))]}
+          onChange={(id) => edit((l) => void (l.clickSound = id ? { assetId: id, volume: l.clickSound?.volume ?? 1 } : null))}
+        />
+      </Row>
+      {layer.clickSound && (
+        <Row label="Volume %" tip="Loudness of the click sound. 100% = as recorded.">
+          <NumberField
+            value={layer.clickSound.volume}
+            displayScale={100}
+            decimals={0}
+            step={5}
+            min={0}
+            max={400}
+            onCommit={(v) => edit((l) => void (l.clickSound && (l.clickSound.volume = v)))}
+            testId="cursor-click-volume"
+          />
+        </Row>
+      )}
     </Section>
   );
 }

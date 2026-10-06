@@ -33,14 +33,21 @@ test('project .zip export and import round-trips', async ({ page }) => {
   await expect(page.getByTestId('layer-item-fixture')).toBeVisible();
   await page.getByTestId('add-text').click();
   const before = (await getState(page)).project;
-  const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Export .zip' }).click()]);
+  // Export .zip lives in the File ▾ menu.
+  await page.getByTestId('file-menu').click();
+  const [download] = await Promise.all([page.waitForEvent('download'), page.getByTestId('file-export-zip').click()]);
+  await expect(page.getByTestId('file-menu-list')).toHaveCount(0); // picking an item closes the menu
   const zip = test.info().outputPath(`Zip ${Date.now()}.motion.zip`);
   await download.saveAs(zip);
 
   page.on('dialog', (d) => d.accept()); // "discard unsaved changes?"
   await page.getByRole('button', { name: 'New' }).click();
   expect((await getState(page)).project.scenes).toHaveLength(0);
-  await page.locator('input[type=file][accept=".zip"]').setInputFiles(zip);
+  // File ▾ → Import .zip opens the file picker for .zip files.
+  await page.getByTestId('file-menu').click();
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.getByTestId('file-import-zip').click()]);
+  await expect(page.locator('input[type=file][accept=".zip"]')).toHaveCount(1);
+  await chooser.setFiles(zip);
   await expect.poll(async () => (await getState(page)).name).toMatch(/^Zip \d+/);
   const after = await getState(page);
   expect(comparable(after.project)).toEqual(comparable(before));

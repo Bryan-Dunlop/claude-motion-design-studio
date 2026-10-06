@@ -1,0 +1,146 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      # `npm ci` must not download Chromium itself (scripts/postinstall.mjs); the cached install step below does it.
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      # Windows ffmpeg: a versioned static build from BtbN/FFmpeg-Builds (release branch 8.1), cached by this name.
+      FFMPEG_WIN_BUILD: ffmpeg-n8.1-latest-win64-gpl-8.1
+      PW_VERSION: 1.56.1
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # Neither runner image ships ffmpeg, and the exporter and the tests call bare `ffmpeg` / `ffprobe`.
+      - name: Install ffmpeg (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Restore ffmpeg (Windows)
+        if: runner.os == 'Windows'
+        id: ffmpeg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}\ffmpeg
+          key: ${{ env.FFMPEG_WIN_BUILD }}
+
+      - name: Download ffmpeg (Windows, static build)
+        if: runner.os == 'Windows' && steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        id: ffmpeg-download
+        # Any failure (or a stalled download) falls back to Chocolatey below.
+        continue-on-error: true
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # The progress bar slows Invoke-WebRequest down a lot on big files.
+          $ProgressPreference = 'SilentlyContinue'
+          $base = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest'
+          $zip = Join-Path $env:RUNNER_TEMP "$env:FFMPEG_WIN_BUILD.zip"
+          $sums = Join-Path $env:RUNNER_TEMP 'ffmpeg-checksums.sha256'
+          Invoke-WebRequest "$base/$env:FFMPEG_WIN_BUILD.zip" -OutFile $zip
+          Invoke-WebRequest "$base/checksums.sha256" -OutFile $sums
+          $line = Get-Content $sums | Where-Object { $_ -like "*$env:FFMPEG_WIN_BUILD.zip" } | Select-Object -First 1
+          if (-not $line) { throw "No checksum listed for $env:FFMPEG_WIN_BUILD.zip" }
+          $expected = ($line -split '\s+')[0].ToLower()
+          $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          if ($actual -ne $expected) { throw "Checksum mismatch for $env:FFMPEG_WIN_BUILD.zip: $actual, expected $expected" }
+          Expand-Archive $zip -DestinationPath (Join-Path $env:RUNNER_TEMP 'ffmpeg') -Force
+
+      - name: Save ffmpeg (Windows)
+        if: runner.os == 'Windows' && steps.ffmpeg-download.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}\ffmpeg
+          key: ${{ env.FFMPEG_WIN_BUILD }}
+
+      - name: Add ffmpeg to PATH (Windows)
+        if: runner.os == 'Windows' && (steps.ffmpeg-cache.outputs.cache-hit == 'true' || steps.ffmpeg-download.outcome == 'success')
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem (Join-Path $env:RUNNER_TEMP 'ffmpeg') -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          if (-not $exe) { throw 'ffmpeg.exe not found in the extracted build' }
+          $exe.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install ffmpeg with Chocolatey (Windows fallback)
+        if: runner.os == 'Windows' && steps.ffmpeg-cache.outputs.cache-hit != 'true' && steps.ffmpeg-download.outcome != 'success'
+        run: choco install ffmpeg -y --no-progress
+
+      - name: Check ffmpeg
+        run: ffmpeg -hide_banner -version && ffprobe -hide_banner -version
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Restore Playwright Chromium
+        id: pw-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.os == 'Windows' && '~\AppData\Local\ms-playwright' || '~/.cache/ms-playwright' }}
+          key: playwright-${{ runner.os }}-${{ env.PW_VERSION }}-chromium-headless-shell
+
+      # Everything runs headless, so the headless shell is enough (it is what chromium.launch({ headless: true }) uses).
+      - name: Install Playwright Chromium (Ubuntu, with system dependencies)
+        if: runner.os == 'Linux'
+        run: npx playwright install --with-deps --only-shell chromium
+
+      - name: Install Playwright Chromium (Windows)
+        if: runner.os == 'Windows'
+        run: npx playwright install --only-shell chromium
+
+      - name: Save Playwright Chromium
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.os == 'Windows' && '~\AppData\Local\ms-playwright' || '~/.cache/ms-playwright' }}
+          key: playwright-${{ runner.os }}-${{ env.PW_VERSION }}-chromium-headless-shell
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm run test:unit
+
+      - name: End-to-end tests
+        run: npx playwright test
+        env:
+          # The test server (server/dev.ts) also writes everything it prints here.
+          MOTION_LOG_FILE: ${{ runner.temp }}/e2e-server.log
+
+      - name: Upload test results and the server log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}
+          path: |
+            test-results/
+            ${{ runner.temp }}/e2e-server.log
+          if-no-files-found: ignore
+          retention-days: 14

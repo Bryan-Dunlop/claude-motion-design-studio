@@ -1,8 +1,8 @@
 // Shared building blocks for the Properties panel sections.
 import { makeId } from '../../../shared/presets';
 import { PROP_LABELS, propLabel } from '../../../shared/propLabels';
-import { ANIMATABLE, type Layer, type Scene } from '../../../shared/schema';
-import { relinkAsset, updateLayers } from '../../actions';
+import { ANIMATABLE, type Asset, type Layer, type Scene } from '../../../shared/schema';
+import { AUDIO_EXTS, FONT_EXTS, IMAGE_EXTS, relinkAsset, updateLayers } from '../../actions';
 import { currentValue, findLayer, keyAt, layerLocalTime, setProp, toggleKeyframe, useEditor } from '../../store';
 import { ColorField, NumberField, Row } from '../Fields';
 
@@ -119,11 +119,16 @@ export function useLayerFields(scene: Scene, layer: Layer) {
 
 export type LayerFields = ReturnType<typeof useLayerFields>;
 
-export function RelinkButton({ assetId, name }: { assetId: string; name: string }) {
+export function RelinkButton({ assetId, name, type }: { assetId: string; name: string; type?: Asset['type'] }) {
+  const accept = type === 'audio' ? AUDIO_EXTS : type === 'font' ? FONT_EXTS : type ? IMAGE_EXTS : `${IMAGE_EXTS},${FONT_EXTS},${AUDIO_EXTS}`;
   return (
-    <label className="button danger" title="The original file is missing. Pick a replacement file; layers using it keep their settings.">
+    <label
+      className="button danger"
+      title={`The original file is missing. Pick a replacement file; ${type === 'audio' ? 'clips' : 'layers'} using it keep their settings.`}
+      data-testid={`relink-${name}`}
+    >
       Missing: {name} — Relink…
-      <input type="file" hidden accept=".png,.jpg,.jpeg,.webp,.svg,.ttf,.otf,.woff,.woff2" onChange={(e) => e.target.files?.[0] && relinkAsset(assetId, e.target.files[0])} />
+      <input type="file" hidden accept={accept} onChange={(e) => e.target.files?.[0] && relinkAsset(assetId, e.target.files[0])} />
     </label>
   );
 }

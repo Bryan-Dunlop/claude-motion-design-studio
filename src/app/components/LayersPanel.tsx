@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { Layer } from '../../shared/schema';
-import { addScene, deleteLayers, deleteScene, duplicateLayers, duplicateScene, moveLayer, moveScene, renameScene, updateLayers } from '../actions';
+import { addClip, addScene, deleteLayers, deleteScene, duplicateLayers, duplicateScene, moveLayer, moveScene, renameScene, updateLayers } from '../actions';
+import { clockLabel } from '../audio/clips';
 import { useEditor } from '../store';
 import { RelinkButton } from './Properties';
 
@@ -153,10 +154,16 @@ export function LayersPanel() {
           </div>
           <ul className="list assets">
             {project.assets.map((a) => (
-              <li key={a.id} title={`${a.relativePath}\nsha256 ${a.hash}`}>
-                <span className="icon">{a.type === 'font' ? 'Aa' : '▣'}</span>
+              <li key={a.id} title={`${a.relativePath}\nsha256 ${a.hash}`} data-testid={`asset-${a.originalName}`}>
+                <span className="icon">{a.type === 'font' ? 'Aa' : a.type === 'audio' ? '♪' : '▣'}</span>
                 <span className="name">{a.type === 'font' ? `${a.fontFamily} (${a.originalName})` : a.originalName}</span>
-                {missing.has(a.id) && <RelinkButton assetId={a.id} name={a.originalName} />}
+                {a.type === 'audio' && a.duration !== undefined && <span className="muted small">{clockLabel(a.duration)}</span>}
+                {a.type === 'audio' && (
+                  <button className="add-at-playhead" title="Add this sound to the timeline at the playhead" onClick={() => addClip(a, { atPlayhead: true })} data-testid={`asset-add-${a.originalName}`}>
+                    + at playhead
+                  </button>
+                )}
+                {missing.has(a.id) && <RelinkButton assetId={a.id} name={a.originalName} type={a.type} />}
               </li>
             ))}
           </ul>

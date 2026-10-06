@@ -1,7 +1,7 @@
 // Animation presets and stagger. Both GENERATE ordinary editable data (keyframes / start times).
 import { ANIMATABLE, type Easing, type Keyframe, type Layer } from './schema';
 
-export type PresetKind = 'slide' | 'fade' | 'scale';
+export type PresetKind = 'slide' | 'fade' | 'scale' | 'draw';
 export type PresetPhase = 'in' | 'out';
 export type Direction = 'left' | 'right' | 'up' | 'down';
 
@@ -46,6 +46,9 @@ export function presetProps(params: Pick<PresetParams, 'kind' | 'direction'>): s
       return ['scale'];
     case 'slide':
       return [params.direction === 'left' || params.direction === 'right' ? 'x' : 'y', 'opacity'];
+    case 'draw':
+      // Shapes only (trimEnd is animatable on nothing else).
+      return ['trimEnd'];
   }
 }
 
@@ -72,8 +75,7 @@ export function applyPreset(layer: Layer, params: PresetParams): Record<string, 
   const t1 = Math.min(layer.duration, t0 + dur);
   const base = layer as unknown as Record<string, number>;
 
-  const add = (prop: string, offValue: number) => {
-    const onValue = base[prop];
+  const add = (prop: string, offValue: number, onValue = base[prop]) => {
     const [v0, v1] = params.phase === 'in' ? [offValue, onValue] : [onValue, offValue];
     const keys = (result[prop] ?? []).filter((k) => k.time < t0 - 1e-6 || k.time > t1 + 1e-6);
     keys.push(
@@ -86,6 +88,8 @@ export function applyPreset(layer: Layer, params: PresetParams): Record<string, 
 
   if (params.kind === 'fade') add('opacity', 0);
   if (params.kind === 'scale') add('scale', 0);
+  // Draw on: the outline draws itself from start to end (in: trim end 0 → 1; out: 1 → 0).
+  if (params.kind === 'draw') add('trimEnd', 0, 1);
   if (params.kind === 'slide') {
     const d = params.distance;
     // Direction is the direction of travel. Entering "up" starts below and moves up.

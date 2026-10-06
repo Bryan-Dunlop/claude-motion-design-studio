@@ -67,3 +67,34 @@ export function transitionPartner(project: Project, scene: Scene): Scene | null 
 export function partnerLocalTime(partner: Scene, t: number): number {
   return Math.min(t - partner.start, partner.duration - EPS);
 }
+
+export interface TransitionPlan {
+  scene: Scene;
+  /** The scene it transitions from, drawn by this transition (null: transition in over what is underneath). */
+  partner: Scene | null;
+  /** Eased progress, clamped to 0..1 (spring/custom curves can overshoot). */
+  progress: number;
+}
+
+/**
+ * Transitions running at time t. Each transitioning scene draws its outgoing partner itself (at partnerLocalTime,
+ * without the partner's own transition), so partners are skipped in the normal draw. A scene is drawn as the partner of
+ * at most one transition: later-starting scenes claim first (ties: earlier in the array), and a scene drawn as a partner
+ * doesn't run its own transition.
+ */
+export function planTransitions(project: Project, t: number): { plans: Map<string, TransitionPlan>; partners: Set<string> } {
+  const plans = new Map<string, TransitionPlan>();
+  const partners = new Set<string>();
+  const running = project.scenes
+    .map((scene, index) => ({ scene, index, p: transitionProgress(scene, t) }))
+    .filter((r): r is { scene: Scene; index: number; p: number } => r.p !== null)
+    .sort((a, b) => b.scene.start - a.scene.start || a.index - b.index);
+  for (const { scene, p } of running) {
+    if (partners.has(scene.id)) continue;
+    let partner = transitionPartner(project, scene);
+    if (partner && (partners.has(partner.id) || plans.has(partner.id))) partner = null;
+    if (partner) partners.add(partner.id);
+    plans.set(scene.id, { scene, partner, progress: Math.min(1, Math.max(0, p)) });
+  }
+  return { plans, partners };
+}

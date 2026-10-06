@@ -1,1 +1,24 @@
 /* Styles for lane A (rendering-engine features: effects, transitions, text animation, shapes) — kept separate from styles.css to avoid merge conflicts. */
+.check-row .check { grid-column: 2 / 4; display: flex; align-items: center; gap: 6px; color: #c3c6cf; cursor: pointer; min-width: 0; }
+.check-row input[type='checkbox'] { margin: 0; accent-color: var(--accent); }
+.info-line { margin: 2px 0 0; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Hovering the strip shows "Cross-fade from Hook · 0.6 s"; presses still reach the scene block (drag) and its edges. */
+.transition-strip { pointer-events: auto; }
+/* Text animation (A2): per phase a Style menu + ▶ Preview, raw settings under "Customise" (long labels may wrap). */
+.textanim-phase { display: flex; flex-direction: column; gap: 4px; }
+.textanim-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-height: 26px; margin-top: 4px; }
+.textanim-head h4 { margin: 0; }
+.textanim-head button { padding: 2px 8px; font-size: 12px; }
+.customise { margin: 0 0 2px 24px; padding-left: 8px; border-left: 2px solid var(--line); }
+.section .customise > summary { padding: 3px 0; font-size: 12px; font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--muted); }
+.customise-body { display: flex; flex-direction: column; gap: 4px; padding: 2px 0 4px; }
+.customise .row { grid-template-columns: 112px 1fr; }
+.customise .row-kf { display: none; }
+.customise .row-label { white-space: normal; line-height: 1.2; }
+.customise .check-row .check { grid-column: 1 / -1; }
+/* Shapes v2 (A3): gradient angle with an arrow that turns with it; the "add an outline first" hint in Draw outline (trim). */
+.angle-field { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.angle-field .num-suffix { flex: 1; }
+.angle-arrow { flex: none; width: 16px; height: 16px; fill: none; stroke: var(--key); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.trim-hint { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 12px; }
+.trim-hint button { flex: none; padding: 2px 8px; font-size: 12px; }

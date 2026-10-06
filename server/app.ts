@@ -9,7 +9,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import { createServer as createViteServer } from 'vite';
 import { exportFileName, exportSize, parseExportOptions } from '../src/shared/exportSize';
 import { decodeAudioInfo } from './audioDecode';
-import { acceptFrame, cancel, fail, ffmpegAvailable, finishFrames, getJob, publicJob, startExport, FFMPEG_HELP } from './exporter';
+import { acceptFrame, cancel, fail, ffmpegAvailable, finishFrames, freeOutFile, getJob, publicJob, startExport, FFMPEG_HELP } from './exporter';
 import { isIgnoredFolder, isInside } from './paths';
 import { HttpError, parseProject, sanitizeName, Workspace } from './projects';
 
@@ -104,7 +104,9 @@ export async function startServer(opts: { port: number; workspace: string; host?
     const options = parsed.options;
     const name = req.body.name ? sanitizeName(String(req.body.name)) : '';
     const { outW, outH } = exportSize(project.settings, options.scale);
-    const outFile = path.join(ws.exports, exportFileName(name, outW, outH, new Date()));
+    const now = new Date();
+    // Two exports in the same second would otherwise share (and overwrite) one file.
+    const outFile = freeOutFile(ws.exports, (n) => exportFileName(name, outW, outH, now, n));
     const projectDir = name ? ws.projectDir(name) : null;
     try {
       const job = await startExport({ project, projectDir, outFile, baseUrl, options, resolveAsset: (a) => ws.resolveAsset(projectDir, a) });

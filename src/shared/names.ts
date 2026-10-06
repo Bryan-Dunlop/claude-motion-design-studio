@@ -1,8 +1,9 @@
 // Project and file names that are safe on Windows, macOS and Linux. Shared by the server (folder names) and the
 // Save-as dialog (so what the user sees is exactly what gets saved).
-// Windows device names (COM0/LPT0 included, as Microsoft's naming rules list them); "nul.txt" is the device too.
+// Windows device names (COM0/LPT0 and COM¹–³/LPT¹–³ included, as Microsoft's naming rules list them, plus the console
+// devices CONIN$/CONOUT$); "nul.txt" is the device too. sanitizeName strips '$' and superscripts before its check.
 const RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/i;
-const RESERVED_WITH_EXT = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i;
+const RESERVED_WITH_EXT = /^(con|prn|aux|nul|conin\$|conout\$|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?$/i;
 
 /** Letters, digits, spaces, '-' and '_' only; no trailing dots/spaces; never a Windows reserved device name. */
 export function sanitizeName(name: string): string {

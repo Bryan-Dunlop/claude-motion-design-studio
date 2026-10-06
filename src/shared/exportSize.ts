@@ -62,8 +62,11 @@ export function sizeLabel(settings: Pick<Settings, 'width' | 'height'>, exportSc
   return `${Math.round(exportScale * 100)}% — ${outW}×${outH}${note}`;
 }
 
-/** File name of an exported video: `${name}-${W}x${H}-${stamp}.mp4` (W×H = the output size; no ':' for Windows). */
-export function exportFileName(name: string, outW: number, outH: number, date: Date): string {
+/**
+ * File name of an exported video: `${name}-${W}x${H}-${stamp}.mp4` (W×H = the output size; no ':' for Windows). The
+ * stamp has one-second steps, so a second export started in the same second gets `n` ≥ 2: `…-${stamp}-2.mp4`.
+ */
+export function exportFileName(name: string, outW: number, outH: number, date: Date, n = 1): string {
   const stamp = date.toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  return `${name || 'untitled'}-${outW}x${outH}-${stamp}.mp4`;
+  return `${name || 'untitled'}-${outW}x${outH}-${stamp}${n > 1 ? `-${n}` : ''}.mp4`;
 }

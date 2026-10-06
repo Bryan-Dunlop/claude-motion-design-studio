@@ -12,9 +12,9 @@ export function frameAt(project: Project, time: number): number {
   return Math.min(frameCount(project) - 1, Math.floor(time * project.settings.fps + 1e-6));
 }
 
-/** `${name}-${W}x${H}-frame${n}.png` */
-export function stillFileName(name: string, project: Project, frame: number): string {
-  return `${name}-${project.settings.width}x${project.settings.height}-frame${frame}.png`;
+/** `${name}-${W}x${H}-frame${n}.png` (an unsaved project is "untitled", like its MP4). */
+export function stillFileName(name: string | null, project: Project, frame: number): string {
+  return `${name || 'untitled'}-${project.settings.width}x${project.settings.height}-frame${frame}.png`;
 }
 
 /** Render frame `frame` of `project` at full size and encode it as PNG. */
@@ -34,7 +34,7 @@ export async function downloadStill() {
     // Loaded like the render page does (cached, so instant once the preview has them; fonts in use are awaited).
     const { missing: _missing, ...resources } = await loadResources(project, (id) => assetUrl(projectName, project.assets.find((a) => a.id === id)!));
     const blob = await renderStill(project, frame, resources);
-    const name = stillFileName(projectName ?? 'Untitled', project, frame);
+    const name = stillFileName(projectName, project, frame);
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = name;

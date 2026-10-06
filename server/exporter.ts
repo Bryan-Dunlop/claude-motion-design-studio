@@ -4,6 +4,7 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import path from 'node:path';
 import type { Browser } from 'playwright';
 import { ExportOptionsSchema, exportSize, type ExportOptions, type ExportOptionsInput } from '../src/shared/exportSize';
 import { frameCount } from '../src/shared/renderFrame';
@@ -169,6 +170,24 @@ export async function startExport(opts: {
 
 function isFinal(job: ExportJob) {
   return job.status === 'done' || job.status === 'error' || job.status === 'cancelled';
+}
+
+/**
+ * Is a running export writing `file`? ffmpeg only creates its output after the first frames arrive, so a file that
+ * doesn't exist yet can still be taken. Compared case-insensitively: on Windows and macOS that is the same file.
+ */
+export function isExportTarget(file: string): boolean {
+  const key = path.resolve(file).toLowerCase();
+  for (const job of jobs.values()) if (!isFinal(job) && path.resolve(job.outFile).toLowerCase() === key) return true;
+  return false;
+}
+
+/** The first `dir/fileName(n)` (n = 1, 2, …) that is neither on disk nor being written by a running export. */
+export function freeOutFile(dir: string, fileName: (n: number) => string, inUse: (file: string) => boolean = isExportTarget): string {
+  for (let n = 1; ; n++) {
+    const file = path.join(dir, fileName(n));
+    if (!fs.existsSync(file) && !inUse(file)) return file;
+  }
 }
 
 /** Called for each frame POSTed by the render page, in order. Applies backpressure. */

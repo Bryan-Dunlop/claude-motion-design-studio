@@ -1,9 +1,13 @@
 // B3 export options: zod defaults/validation, the dialog's Size/Quality labels, output file names, the ffmpeg command
-// and the CLI flags (server/cliArgs.ts).
-import { afterEach, describe, expect, it, vi } from 'vitest';
+// and the CLI flags (server/cliArgs.ts); the PNG still's frame number and file name.
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { parseRenderArgs } from '../../server/cliArgs';
-import { ffmpegArgs } from '../../server/exporter';
+import { ffmpegArgs, freeOutFile, isExportTarget } from '../../server/exporter';
 import { loadPrefs } from '../../src/app/prefs';
+import { frameAt, stillFileName } from '../../src/app/still';
 import { EXPORT_SCALES, exportFileName, ExportOptionsSchema, exportSize, parseExportOptions, QUALITIES, sizeLabel } from '../../src/shared/exportSize';
 import { makeProject } from '../../src/shared/factories';
 import { emptyProject } from '../../src/shared/schema';
@@ -53,6 +57,43 @@ describe('export options', () => {
     expect(exportFileName('Promo', 1920, 1080, d)).toBe('Promo-1920x1080-2026-10-06T01-18-57.mp4');
     expect(exportFileName('', 684, 384, d)).toBe('untitled-684x384-2026-10-06T01-18-57.mp4');
     expect(exportFileName('Promo', 1920, 1080, d)).not.toMatch(/[<>:"/\\|?*]/);
+  });
+});
+
+describe('two exports never share a file', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'motion-exports-'));
+  afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const d = new Date('2026-10-06T01:18:57.900Z');
+  const name = (n: number) => exportFileName('Promo', 640, 360, d, n);
+
+  it('a second export in the same second gets -2, -3, …', () => {
+    expect(name(1)).toBe('Promo-640x360-2026-10-06T01-18-57.mp4');
+    expect(name(2)).toBe('Promo-640x360-2026-10-06T01-18-57-2.mp4');
+    expect(name(3)).toBe('Promo-640x360-2026-10-06T01-18-57-3.mp4');
+  });
+
+  it('freeOutFile skips files on disk and files a running export is still writing (not on disk yet)', () => {
+    const none = () => false;
+    expect(freeOutFile(dir, name, none)).toBe(path.join(dir, name(1)));
+    fs.writeFileSync(path.join(dir, name(1)), 'done');
+    expect(freeOutFile(dir, name, none)).toBe(path.join(dir, name(2)));
+    const writing = (f: string) => f === path.join(dir, name(2));
+    expect(freeOutFile(dir, name, writing)).toBe(path.join(dir, name(3)));
+    // With no export running, nothing is "in use".
+    expect(isExportTarget(path.join(dir, name(2)))).toBe(false);
+  });
+});
+
+describe('PNG still', () => {
+  const p = at(1280, 720); // 1 s at 30 fps: frames 0–29
+
+  it('saves the frame the playback bar shows: floor(t·fps), the last frame at the very end', () => {
+    expect([0, 0.5, 0.51, 0.5 - 1e-9, 29 / 30, 1].map((t) => frameAt(p, t))).toEqual([0, 15, 15, 15, 29, 29]);
+  });
+
+  it('is named name-WxH-frameN.png at the project size; an unsaved project is "untitled"', () => {
+    expect(stillFileName('Promo', p, 15)).toBe('Promo-1280x720-frame15.png');
+    expect(stillFileName(null, p, 0)).toBe('untitled-1280x720-frame0.png');
   });
 });
 

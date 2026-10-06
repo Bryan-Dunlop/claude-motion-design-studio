@@ -131,10 +131,15 @@ test('Export dialog: Size with live pixel sizes, Quality, Include audio; choices
   await expect(audio).toBeEnabled();
   await expect(audio).toBeChecked();
   await expect(page.getByTestId('export-no-audio')).toHaveCount(0);
+  const summary = page.getByTestId('export-summary');
+  await expect(summary).toContainText('(CRF 26). File:');
+  // Unticked while the project has sound: the summary says so (the choice is remembered, so it must stay visible).
   await audio.uncheck();
+  await expect(summary).toContainText('(CRF 26), without sound. File:');
   await page.keyboard.press('Escape');
   await page.getByTestId('btn-export').click();
   await expect(audio).not.toBeChecked();
+  await expect(summary).toContainText('without sound');
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('motion-studio.prefs')!))).toMatchObject({ exportScale: 0.5, exportQuality: 'draft', exportAudio: false });
 });
 
@@ -182,6 +187,17 @@ test('quality and Include audio reach ffmpeg (x264 settings in the stream, audio
   expect(x264(draft.outFile)).toMatchObject({ crf: '26.0', subme: '2', rc_lookahead: '10' });
   expect(streams(draft.outFile).map((s) => s.codec_type)).toEqual(['video']);
   expect(draft.warnings).toEqual([]);
+  // ~1 s each: consecutive exports often start in the same second, yet each gets its own file.
+  expect(new Set([best.outFile, good.outFile, draft.outFile]).size).toBe(3);
+
+  // Two exports started together (same name, size and second) write two files; neither overwrites the other.
+  const tiny = movingProject(160, 90, { seconds: 0.5 });
+  const [one, two] = await Promise.all([runExport(request, { project: tiny }, 60_000), runExport(request, { project: tiny }, 60_000)]);
+  expect(one.outFile).not.toBe(two.outFile);
+  for (const j of [one, two]) {
+    expect(path.basename(j.outFile)).toMatch(new RegExp(`^untitled-160x90-${STAMP}(-2)?\\.mp4$`));
+    expect(probe(j.outFile)).toMatchObject({ width: 160, height: 90, nb_read_frames: '15' });
+  }
 
   const bad = await request.post('/api/export', { data: { project, scale: 2, crf: 'high' } });
   expect(bad.status()).toBe(400);

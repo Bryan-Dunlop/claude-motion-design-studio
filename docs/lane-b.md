@@ -317,3 +317,204 @@ Playwright:
 - Line hit-testing uses `strokeWidth × |scale| / 2` (the spec wrote `strokeWidth/2`; same at scale 1).
 - Menus have no arrow-key navigation (Tab + Enter work).
 - Copy/paste is in-memory (not the system clipboard), so it doesn't work between two browser tabs.
+
+## B3. Export options, PNG still, copy in another format, Windows, CI
+
+### What the user gets
+
+- **Export dialog choices** (`Export MP4`), each with a plain tooltip:
+  - `Size` with the real pixel size of each choice: `100% — 3840×2160`, `50% — 1920×1080 (Full HD)`,
+    `25% — 960×540 (quick check)`. The sizes follow the project (a 1366×768 project offers `50% — 684×384`). Video
+    sizes are always even (H.264 needs that): an odd half is rounded and the picture still fills the frame (at most
+    1 px is cropped).
+  - `Quality`: `Best (larger file)` (CRF 16 — the v1 setting), `Good` (CRF 20), `Draft (fastest)` (CRF 26 with the
+    faster `veryfast` encoder setting).
+  - `Include audio`: ticked when the project has audio clips or click sounds; greyed out with "— No audio clips"
+    otherwise. Unticked, the MP4 has no sound track (and no "missing audio file" warnings). When the project has sound
+    but the box is unticked, the summary line says "without sound", so a silent final export doesn't go unnoticed.
+  - The choices are remembered for the next export (in this browser, also after a reload).
+  - The summary line shows what you'll get: `1920×1080, 30 fps, 15 s — H.264 MP4 (CRF 16). File:
+    Promo-1920x1080-‹date›.mp4`, and "Same render from a terminal" adds the matching flags
+    (`--scale 0.5 --crf 26 --preset veryfast --no-audio`).
+- **File names**: `Promo-1920x1080-2026-10-06T09-15-02.mp4` — project name, output size, date and time (nothing
+  Windows forbids). Two exports started in the same second (e.g. a quick 25% draft right after another one) get
+  `…-2.mp4` instead of overwriting each other. Unsaved projects export as `untitled-…`.
+- **Command line**: `npm run render -- <folder.motion> <out.mp4> [--scale 0.5|50%] [--crf 20] [--preset veryfast]
+  [--no-audio]` (`--help` lists them). A bad value prints what is wrong plus the usage and exits with code 2, e.g.
+  `--scale must be more than 0 and at most 1 (e.g. 0.5, or 50%)`. The first line says what is rendered:
+  `Rendering 90 frames at 960x540 (50% of 1920x1080) @ 30fps, CRF 16 (medium) -> out.mp4`.
+- **PNG button** (playback bar, after Sound): saves the frame under the playhead as a PNG at the full project size,
+  named `Promo-1920x1080-frame45.png` (the frame number the playback bar shows; an unsaved project is `untitled-…`), and
+  a toast confirms `Saved frame 45 as …`. It is drawn exactly like frame 45 of the MP4 (same renderer, same canvas
+  settings, so the text looks the same): pixel-identical to the export's render page.
+- **Make a copy in another format…** (button under Project settings, in the right panel whenever no layer or clip is
+  selected):
+  pick `9:16 vertical` (Reels, TikTok, Shorts), `1:1 square` (Instagram, LinkedIn posts), `4:5 portrait` (Instagram
+  feed) or `16:9 landscape` (YouTube, websites); each shows its pixel size and the current format is greyed out. A
+  Save-as dialog prefilled with `<name> 9x16` names the copy; it is saved (with its images, fonts and sounds) and
+  opens, with a toast "Opened the 9:16 copy "Promo 9x16". Layers were scaled to fit — adjust them as you like." The
+  new format keeps the long edge (3840×2160 → 2160×3840). The whole old frame is scaled down to fit inside the new one
+  and centred, so the layout, motion paths, cursor moves, sizes and effects keep their proportions (nothing ends up
+  outside the frame that wasn't outside before). The original project is not changed; if it has unsaved changes the
+  dialog says the copy includes them and the original keeps its last saved version. Esc / Cancel changes nothing.
+- **Windows**:
+  - Save as shows the exact folder name that will be used: characters Windows forbids are dropped, no trailing dots
+    or spaces, and device names (`CON`, `NUL`, `COM0`–`COM9`, `LPT0`–`LPT9`, …) get a `_`. The "already exists"
+    warning ignores upper/lower case (on Windows and macOS `Promo` and `promo` are the same folder).
+  - Asset paths inside a project that Windows can't store (a device name such as `NUL.png`, `COM¹`, `CONIN$`, a `:`
+    stream, a trailing dot or space) are refused instead of reaching a device, so a project that opens on a Mac also
+    opens on a PC; `assets\logo.png` (written on Windows) means the same file on every system.
+  - A `project.json` edited in Windows Notepad (saved with a byte-order mark) opens; a broken one says "project.json is
+    not valid JSON (…)" instead of a server error.
+  - `Import .zip` accepts zips made with Windows PowerShell's `Compress-Archive` (which writes `\` in the zip).
+  - Save as (and format copies) of an opened or imported project bring its asset files along even when they only exist
+    in that project's folder (before, an imported project saved under a new name lost its images).
+  - The dev server's file watcher ignores the workspace and test folders whatever the path separators, drive-letter
+    case or characters like `(`/`)` in the path.
+- **Continuous integration** (`.github/workflows/ci.yml`): every push to `main` and every pull request runs typecheck,
+  unit and Playwright tests on Ubuntu and Windows (details below).
+
+### How it works (for maintainers)
+
+- `src/shared/exportSize.ts`: `exportSize(settings, s)` (foundation: even sizes, `scale = max(outW/W, outH/H)`) is
+  used everywhere — dialog labels, `POST /api/export`, the job (`job.size`), `acceptFrame`'s byte check, ffmpeg `-s`,
+  `GET /api/jobs/:id/project` (`{project, outW, outH, scale}` for the render page), the CLI and
+  `window.motion.render(p, t, {exportScale})`. `ExportOptionsSchema` (zod, all optional): `scale` 0 < s ≤ 1 (1),
+  `crf` integer 0–51 (16), `preset` an x264 preset (`medium`), `audio` (true); `parseExportOptions` turns zod issues
+  into one plain sentence per option (400 `Invalid export options: …`). `QUALITIES`, `EXPORT_SCALES`, `sizeLabel`,
+  `exportFileName(name, W, H, date, n)`.
+- `server/exporter.ts`: `ffmpegArgs(project, out, audio, options)` (`-s outW×outH`, `-crf`, `-preset`; the
+  colour-accurate scale filter is unchanged); `audio: false` → no audio inputs at all; `publicJob` adds `width`,
+  `height`, `options`. `freeOutFile(dir, n => name)` picks the first name that is neither on disk nor being written by
+  a running job (`isExportTarget`; ffmpeg creates its file only after the first frames). Failed exports and 5xx errors
+  are also logged on the server.
+- `src/render/main.ts`: an export job renders at the server's `scale` into an `outW×outH` canvas; the test API's
+  `exportScale` option renders exactly like an export at that size, so export-vs-render tests compare equal sizes.
+- `server/cliArgs.ts`: `parseRenderArgs(argv)` → `{folder, out, options}` (pure; `--flag value` or `--flag=value`,
+  any order) and `RENDER_USAGE`; `server/render-cli.ts` uses it.
+- `src/app/still.ts`: `frameAt(project, t)` (also used by the playback bar's frame counter), `stillFileName`,
+  `renderStill` (`createRenderCanvas`, `renderFrame(t = frame/fps, scale 1)` with its own canvas pool), `downloadStill`
+  (resources via the cached `loadResources`).
+- `src/shared/fitToFrame.ts`: `fitToFrame(project, W2, H2)` with `k = min(W2/W, H2/H)`: layer `x`/`y` and their
+  keyframes → `W2/2 + k·(x − W/2)` (same for y), cursor points the same, `scale` and scale keyframes × k; everything
+  else is in layer units and follows the layer scale (effects via lane A's layer-scale factor, text-animator distances,
+  outlines). `formatSize(settings, aspect)` (keep the long edge; the Aspect setting uses it too) and `aspectOf(W, H)`.
+- `components/Dialogs.tsx`: `FormatCopyDialog` → `SaveAsDialog` in copy mode (`copy`, `defaultName`, `title`,
+  `onSaved`) → `actions.saveCopyAs` (PUT, then `loadProject`: clean history, not dirty). `putProject` sends
+  `?from=<open project>` when saving under another name and `Workspace.save(name, data, from)` copies assets that are
+  missing in the new folder from `from`'s folder, then from the scratch store.
+- `prefs.ts`: `exportScale` (1), `exportQuality` (`best`), `exportAudio` (true); invalid stored values fall back.
+- Windows: `src/shared/names.ts` `isPortableName` / `sameName` (+ the foundation's `sanitizeName`, now also `COM0`/
+  `LPT0`); `server/projects.ts` `safeJoin` (every path part portable, `\` treated as `/`), `parseJsonText` (strips a
+  BOM, 400 on bad JSON), `importZip` (entry names normalised to `/`, sub-folders created); `server/paths.ts`
+  `isInside(file, dir, pathLib)` / `isIgnoredFolder` for Vite's watch filter (testable with `path.win32` on Linux).
+- `server/dev.ts`: `MOTION_LOG_FILE=<file>` mirrors everything the server prints (and crashes) into a file — CI
+  uploads it when tests fail. `playwright.config.ts` adds the `github` reporter on CI (failure annotations).
+- `styles.css`: `.transition-strip` no longer has `pointer-events: none` (lane A needs its tooltip).
+
+### CI (`.github/workflows/ci.yml`)
+
+- Matrix `ubuntu-latest` + `windows-latest`, `fail-fast: false`, Node 22 with the npm cache, 45 min timeout, one run
+  per branch (newer pushes cancel older runs).
+- ffmpeg (neither runner image has it; the exporter and the test helpers call bare `ffmpeg`/`ffprobe`):
+  - Ubuntu: `sudo apt-get install -y --no-install-recommends ffmpeg` (6.1.1 on 24.04 — the version the spec's commands
+    were verified on).
+  - Windows: the BtbN static build `ffmpeg-n8.1-latest-win64-gpl-8.1.zip` (the 8.1 release branch of BtbN's
+    `latest` release), checked against that release's `checksums.sha256`, cached with actions/cache under the asset
+    name and appended to `$GITHUB_PATH`. If the download fails or stalls (10 min), `choco install ffmpeg -y
+    --no-progress` is used instead.
+  - Then `ffmpeg -version && ffprobe -version` fails fast if either is missing.
+- `npm ci` with `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` (skips the postinstall download); Playwright's Chromium headless
+  shell is cached in `~/.cache/ms-playwright` / `%LOCALAPPDATA%\ms-playwright` keyed on 1.56.1 and installed with
+  `npx playwright install --with-deps --only-shell chromium` (Ubuntu) / `npx playwright install --only-shell chromium`
+  (Windows) — everything runs headless. `PLAYWRIGHT_BROWSERS_PATH` is not needed.
+- Typecheck → unit → e2e (`MOTION_LOG_FILE` set); on failure `test-results/` and the server log are uploaded as
+  `test-results-<os>` (kept 14 days).
+- Checked here: the YAML parses, and the pinned asset exists in BtbN's current `latest` release with a checksum line
+  in the format the step parses. The workflow itself has not run on GitHub yet (no push from this lane).
+
+### Tests
+
+Unit (vitest):
+- `tests/unit/app-exportOptions.test.ts` — options: all optional with defaults (100%, CRF 16, medium, audio); bad values
+  rejected with one plain message per option; the three qualities; live Size labels (4K → `50% — 1920×1080 (Full HD)`,
+  `25% — 960×540 (quick check)`, vertical 4K, 1366×768 → `684×384` / `342×192`); `exportSize` 1080×1350 @ 50% →
+  540×676, 1366×768 @ 50% → 684×384, 1920×1080 @ 25% → 480×270 with the fill scale; file names (output size, no
+  forbidden characters, `-2`/`-3` for the same second); `freeOutFile` skips files on disk and files a running export is
+  writing; PNG `frameAt` (floor(t·fps), last frame at the end) and `stillFileName`; `ffmpegArgs` defaults (v1 command)
+  and with options (`-s 684x384 -crf 26 -preset veryfast`, colour flags kept); CLI flag parsing (any order, `=` form,
+  `50%`/`.5`, Windows paths) and its error messages; remembered choices (defaults, invalid stored values dropped).
+- `tests/unit/app-fitToFrame.test.ts` — `formatSize` keeps the long edge (4K → 2160×3840 / 3840×3840 / 3072×3840,
+  1366×768 → 768×1366); for 9:16, 1:1, 4:5 and 16:9: the frame centre maps to the new centre, and every layer's box
+  corners (rotated, anchored, keyframed, text, cursor points) are exactly the frame's map of the old corners and stay
+  inside the new frame; x/y/scale keyframes mapped, other properties untouched, input not mutated; there-and-back
+  composition.
+- `tests/unit/app-windows.test.ts` — `sanitizeName` (device names incl. COM0/LPT0, `.motion` suffix, trailing
+  dots/spaces, forbidden characters), `sameName`; `isPortableName` (devices with/without extension, COM¹–³, CONIN$/
+  CONOUT$, trailing dot/space, `:` streams, forbidden and control characters); `safeJoin` (escapes, absolute paths,
+  non-portable parts, `\` as a separator on every OS); a Notepad `project.json` (BOM + CRLF) opens; a broken one is a
+  400 "not valid JSON"; a PowerShell-style zip (`\` entry names + BOM) imports with its asset; the Vite watch filter on
+  Windows paths (separators, drive-letter case, `(`/`)`, a sibling folder with the same prefix) and POSIX paths;
+  Save as with `from` copies an asset that only exists in the source folder, byte-for-byte.
+
+Playwright (`tests/e2e/app-export-options.spec.ts`):
+- "Export dialog: Size with live pixel sizes, Quality, Include audio; choices are remembered…" — labels for a 1366×768
+  project and live for 4K (and back after undo); defaults 100% / Best; Include audio disabled with "No audio clips";
+  50% + Draft → summary, CLI hint, export done 15/15, file `name-684x384-<stamp>.mp4` (also the download name), the
+  video is 684×384 with Draft x264 settings; choices remembered on reopen and after a reload (localStorage); after
+  importing a WAV, Include audio is enabled and ticked, the summary has no "without sound"; unticking it adds "without
+  sound" and is remembered.
+- "scaled exports have the exact even size and match renderFrame at that size (50%, 25%, odd halves)" — 1080×1350 @
+  50% → 540×676, 1366×768 @ 50% → 684×384, 1920×1080 @ 25% → 480×270 (image, stroked rect, two-line text, cursor):
+  ffprobe size/frames, the render page is told `max(outW/W, outH/H)`, and frames 0/15/29 match
+  `window.motion.render(…, {exportScale})` (with the wrong-frame check).
+- "quality and Include audio reach ffmpeg…" — no options = CRF 16 medium + AAC track; `crf: 20` → `crf=20.0` and a
+  smaller file; Draft + `audio: false` → `crf=26.0 subme=2 rc_lookahead=10`, video only, no warnings; three
+  consecutive exports and two exports started together each get their own file (`…-2.mp4`); bad options → 400 with the
+  plain message.
+- "CLI flags --scale, --crf, --preset and --no-audio…" — `--scale 50% --crf 26 --preset=veryfast --no-audio` → the
+  printed line, 160×90, 30 frames, Draft settings, no audio; `--scale 50` → exit 2 with the message and the usage.
+- "PNG button…" — at t = 1.51 s the counter shows frame 45, the tooltip names the size, the download is
+  `name-1280x720-frame45.png` (toast), a 1280×720 PNG identical to render.html at 45/30 s (mean abs diff 0) and clearly
+  different from frame 46.
+- "Make a copy in another format…" — an imported project (its image only in the project folder) with an unsaved edit;
+  Esc changes nothing; 16:9 greyed out as the current format, 9:16 1080×1920, 1:1 1920×1920, 4:5 1536×1920; the
+  unsaved-changes note; Save as prefilled `<name> 9x16` → the copy opens clean (no undo history, not dirty) with the
+  toast; every layer's x/y/scale, x keyframes and cursor points mapped with k = 0.5625 around the centre, rotation
+  keyframes unchanged, the unsaved edit included; the copy's folder has the image byte-for-byte and it loads; the
+  original on disk is unchanged.
+
+### Measured
+
+- Scaled export vs `renderFrame` at the same size (frames 0/15/29): 1080×1350 @ 50% → 540×676: mean |diff| 0.95–1.03,
+  PSNR 37.3–37.4 dB; 1366×768 @ 50% → 684×384: 0.99–1.06, 36.1–36.3 dB; 1920×1080 @ 25% → 480×270: 1.08–1.18,
+  35.2–35.6 dB. The test asserts PSNR > 34 dB (small frames: 4:2:0 chroma on sharp edges caps PSNR around 35–37 dB,
+  while a 0.07% scale error already drops it to 27.6 dB) and mean |diff| < 1.5.
+- PNG still vs render.html at the same frame: identical (mean |diff| 0.0000).
+- x264 settings found in the streams: Best `crf=16.0 subme=7 rc_lookahead=40`, Good `crf=20.0`, Draft `crf=26.0
+  subme=2 rc_lookahead=10`.
+- The B3 spec file (6 tests) runs in about 27 s; the whole e2e suite (47 tests) in about 1.8 min (green twice in a
+  row); 182 unit tests in about 2 s.
+
+CLI renders on this 4-core machine of the 3 s 1080p export-test project (90 frames; times include ~2 s of start-up):
+
+| Options | Time | File size |
+|---|---|---|
+| 100% Best | 6.6 s | 182 KB |
+| 50% | 4.2 s | 97 KB |
+| 25% | 3.3 s | 50 KB |
+| Good (CRF 20) | 6.7 s | 135 KB |
+| Draft (CRF 26, veryfast) | 5.9 s | 89 KB |
+| 25% Draft | 3.1 s | 24 KB |
+
+### Not done / limitations
+
+- The Windows CI leg has not run yet (no Windows machine here; the workflow was checked statically). Windows-only
+  behaviour (Notepad BOM, PowerShell zips, device names, watch-filter paths) is covered by unit tests that run on any OS.
+- `--preset` is an extra CLI flag (the spec lists `--scale`, `--crf`, `--no-audio`) so a terminal render can reproduce
+  `Draft` exactly; the dialog only offers 100/50/25%, the CLI accepts any fraction 0 < s ≤ 1.
+- The PNG is the frame under the playhead at its exact frame time (`frame/fps`, like the MP4), not an in-between time
+  when the playhead sits between two frames.
+- The remembered export choices are per browser, not per project.
+- A format copy maps positions, motion and sizes only; layers that were partly outside the old frame stay partly outside
+  (same relative placement), and nothing is re-laid-out for the new shape — the toast invites adjusting.

@@ -29,7 +29,7 @@ import { Properties } from './components/Properties';
 import { Timeline } from './components/Timeline';
 import { clampTimelineHeight, usePrefs } from './prefs';
 import { useResourceLoader } from './resources';
-import { downloadStill } from './still';
+import { downloadStill, frameAt } from './still';
 import { isDirty, snapToFrame, useEditor } from './store';
 
 type DialogKind = 'open' | 'saveAs' | 'export' | null;
@@ -355,7 +355,8 @@ function PlaybackBar() {
   const st = useEditor.getState;
   const fps = project.settings.fps;
   const total = frameCount(project);
-  const frame = Math.min(total - 1, Math.floor(time * fps + 1e-6));
+  // Same frame number the PNG button saves.
+  const frame = frameAt(project, time);
   const step = (d: number) => {
     st().setPlaying(false);
     st().setTime(snapToFrame(st().time, fps) + d / fps);

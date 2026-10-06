@@ -106,17 +106,22 @@ export class Workspace {
 
   importZip(bytes: Buffer, preferredName: string): { name: string; project: Project } {
     const zip = new AdmZip(bytes);
-    const entry = zip.getEntries().find((e) => e.entryName.replace(/^[^/]+\.motion\//, '') === 'project.json');
-    if (!entry) throw new HttpError(400, 'Zip does not contain a project.json');
-    const prefix = entry.entryName.slice(0, -'project.json'.length);
-    const project = parseProject(JSON.parse(entry.getData().toString('utf8')));
+    // Entry names use '/', except in zips made by Windows PowerShell 5.1's Compress-Archive, which writes '\'.
+    const entries = new Map(zip.getEntries().filter((e) => !e.isDirectory).map((e) => [toSlashes(e.entryName), e]));
+    const jsonName = [...entries.keys()].find((n) => n.replace(/^[^/]+\.motion\//, '') === 'project.json');
+    if (!jsonName) throw new HttpError(400, 'Zip does not contain a project.json');
+    const prefix = jsonName.slice(0, -'project.json'.length);
+    const project = parseProject(parseJsonText(entries.get(jsonName)!.getData().toString('utf8')));
     let name = sanitizeName(preferredName) || 'Imported';
     for (let i = 2; fs.existsSync(this.projectDir(name)); i++) name = `${sanitizeName(preferredName) || 'Imported'} ${i}`;
     const dir = this.projectDir(name);
     fs.mkdirSync(path.join(dir, 'assets'), { recursive: true });
     for (const a of project.assets) {
-      const e = zip.getEntry(prefix + a.relativePath);
-      if (e) fs.writeFileSync(safeJoin(dir, a.relativePath), e.getData());
+      const e = entries.get(prefix + toSlashes(a.relativePath));
+      if (!e) continue;
+      const dest = safeJoin(dir, a.relativePath);
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.writeFileSync(dest, e.getData());
     }
     fs.writeFileSync(path.join(dir, 'project.json'), JSON.stringify(project, null, 2));
     return { name, project };
@@ -141,7 +146,20 @@ export function parseProject(data: unknown): Project {
 export function readProjectDir(dir: string): Project {
   const file = path.join(dir, 'project.json');
   if (!fs.existsSync(file)) throw new HttpError(404, `No project.json in ${dir}`);
-  return parseProject(JSON.parse(fs.readFileSync(file, 'utf8')));
+  return parseProject(parseJsonText(fs.readFileSync(file, 'utf8')));
+}
+
+/** project.json text, possibly edited by hand: Windows Notepad saves UTF-8 with a byte-order mark, which JSON.parse rejects. */
+export function parseJsonText(text: string): unknown {
+  try {
+    return JSON.parse(text.replace(/^\uFEFF/, ''));
+  } catch (e) {
+    throw new HttpError(400, `project.json is not valid JSON (${(e as Error).message})`);
+  }
+}
+
+function toSlashes(p: string): string {
+  return p.replace(/\\/g, '/');
 }
 
 function extOf(filename: string): string {
@@ -152,10 +170,11 @@ function extOf(filename: string): string {
 /**
  * Join and refuse anything that escapes the base folder (zip-slip / ../ protection). Every part of `rel` must also be a
  * name Windows can store (isPortableName): a project made on a Mac must open on a PC, and a crafted project/zip must not
- * reach a device such as NUL or an NTFS stream ("logo.png:x").
+ * reach a device such as NUL or an NTFS stream ("logo.png:x"). '\' separates folders on every OS (as on Windows), so a
+ * path written on Windows ("assets\logo.png") names the same file on a Mac instead of a file with a '\' in its name.
  */
 export function safeJoin(base: string, rel: string): string {
-  const p = path.resolve(base, rel);
+  const p = path.resolve(base, toSlashes(rel));
   if (!p.startsWith(path.resolve(base) + path.sep)) throw new HttpError(400, `Unsafe path: ${rel}`);
   if (!rel.split(/[\\/]/).filter((s) => s !== '' && s !== '.').every(isPortableName)) throw new HttpError(400, `Unsafe path: ${rel}`);
   return p;

@@ -54,10 +54,14 @@ jobs:
       - name: Download ffmpeg (Windows, static build)
         if: runner.os == 'Windows' && steps.ffmpeg-cache.outputs.cache-hit != 'true'
         id: ffmpeg-download
+        # Any failure (or a stalled download) falls back to Chocolatey below.
         continue-on-error: true
+        timeout-minutes: 10
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          # The progress bar slows Invoke-WebRequest down a lot on big files.
+          $ProgressPreference = 'SilentlyContinue'
           $base = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest'
           $zip = Join-Path $env:RUNNER_TEMP "$env:FFMPEG_WIN_BUILD.zip"
           $sums = Join-Path $env:RUNNER_TEMP 'ffmpeg-checksums.sha256'

@@ -274,7 +274,9 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
         </label>
       </div>
       <p className="muted small" data-testid="export-summary">
-        {outW}×{outH}, {settings.fps} fps, {settings.durationSec} s — H.264 MP4 (CRF {options.crf}). File: <code>{fileHint}</code>
+        {outW}×{outH}, {settings.fps} fps, {settings.durationSec} s — H.264 MP4 (CRF {options.crf})
+        {/* Remembered choice: say it out loud, so a silent final export doesn't go unnoticed. */}
+        {audioAvailable && !options.audio ? ', without sound' : ''}. File: <code>{fileHint}</code>
       </p>
       {health && !health.ffmpeg && (
         <div className="warn-box" data-testid="ffmpeg-missing">

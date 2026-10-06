@@ -2,7 +2,7 @@
 // project → canvas mapping of `scale` with origin 0). One function used everywhere: the clip region of filtered draws,
 // the scratch canvas of isolated layers, and the unit test checking every drawn coordinate lies inside it.
 // The cursor is drawn at cursorPosition(local), not inside its layer box.
-import { clampResolved } from './effects';
+import { blurMargin, clampResolved } from './effects';
 import {
   applyMatrix,
   boxOfPoints,
@@ -24,11 +24,12 @@ import {
 } from './geometry';
 import { resolveLayer } from './interpolate';
 import type { CursorLayer, ImageLayer, Layer, ShapeLayer, TextLayer } from './schema';
+import { caretRegion, textAnimReach } from './textAnim';
 
 /** Antialiasing fringe around drawn edges, in canvas pixels. */
-const AA_PAD = 2;
+export const AA_PAD = 2;
 /** Safety margin around measured glyph boxes, as a fraction of the font size. */
-const GLYPH_PAD = 0.06;
+export const GLYPH_PAD = 0.06;
 /** Canvas default miterLimit: a sharp corner's miter can reach miterLimit × lineWidth / 2 from the path. */
 export const MITER_LIMIT = 10;
 
@@ -37,8 +38,11 @@ const ARROW_H = Math.max(...CURSOR_ARROW.map((p) => p[1]));
 
 const finite = (v: number, fallback: number) => (Number.isFinite(v) ? v : fallback);
 
-/** Ink of a text layer in its layer box, plus that box (lines laid out exactly like drawText). */
-function textInk(ctx: Ctx2D, layer: TextLayer): { ink: Box; box: { w: number; h: number } } {
+/**
+ * Ink of a text layer in its layer box at layer-local time `local`, plus that box (lines laid out exactly like
+ * drawText) and the largest blur of each blurring text-animator phase (layer px).
+ */
+function textInk(ctx: Ctx2D, layer: TextLayer, local: number): { ink: Box; box: { w: number; h: number }; blurs: number[] } {
   ctx.save();
   ctx.font = fontString(layer);
   setLetterSpacing(ctx, layer.letterSpacing);
@@ -62,10 +66,13 @@ function textInk(ctx: Ctx2D, layer: TextLayer): { ink: Box; box: { w: number; h:
   });
   // Outline (strokeText, round joins) and a little glyph overhang.
   ink = inflateBox(ink, layer.fontSize * GLYPH_PAD + layer.strokeWidth / 2);
-  // Text animators move units up/down by up to |distance| (rise/drop).
-  let dy = 0;
-  for (const a of [layer.textIn, layer.textOut]) if (a && (a.effect === 'rise' || a.effect === 'drop')) dy = Math.max(dy, Math.abs(a.distance));
-  return { ink: inflateBox(ink, 0, dy), box };
+  // A running text animator moves units up/down by up to |distance| (more when the easing overshoots), can grow them
+  // past full size (an overshooting "Grow"; every unit scales about a point inside the text box) and draws the caret.
+  const reach = textAnimReach(layer, local);
+  const grow = (reach.scale - 1) * Math.max(box.w, box.h);
+  ink = inflateBox(ink, grow, grow + reach.scale * reach.dy);
+  if (reach.caret) ink = unionBox(ink, caretRegion(layer, box));
+  return { ink, box, blurs: reach.blurs };
 }
 
 /** Sharp corners whose miter can stick out further than half the line width. */
@@ -116,9 +123,10 @@ export function inkBoundsResolved(layer: Layer, local: number, scale: number, ct
     let ink: Box;
     let box: { w: number; h: number };
     if (layer.type === 'text') {
-      ({ ink, box } = textInk(ctx, layer));
-      // Per-unit blur of a "Blur" text animator: up to |distance| × k canvas px, spreading 3×.
-      for (const a of [layer.textIn, layer.textOut]) if (a?.effect === 'blur') extra = Math.max(extra, 3 * Math.abs(a.distance) * scale * Math.abs(layer.scale));
+      let blurs: number[];
+      ({ ink, box, blurs } = textInk(ctx, layer, local));
+      // Per-unit blur of a "Blur" text animator: up to that blur × k canvas px, spreading 3× (chained blurs add up).
+      for (const b of blurs) extra += blurMargin(b * scale * Math.abs(layer.scale));
     } else {
       ink = layer.type === 'shape' ? shapeInk(layer) : imageInk(layer);
       box = { w: layer.width, h: layer.height };

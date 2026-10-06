@@ -70,6 +70,15 @@ export function applyMatrix(m: Matrix, x: number, y: number): [number, number] {
   return [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
 }
 
+/** a × b (b is applied first), like ctx.transform(b) on a context whose transform is a. */
+export function multiplyMatrix(a: Matrix, b: Matrix): Matrix {
+  return [
+    a[0] * b[0] + a[2] * b[1], a[1] * b[0] + a[3] * b[1],
+    a[0] * b[2] + a[2] * b[3], a[1] * b[2] + a[3] * b[3],
+    a[0] * b[4] + a[2] * b[5] + a[4], a[1] * b[4] + a[3] * b[5] + a[5],
+  ];
+}
+
 export function invertMatrix(m: Matrix): Matrix {
   const [a, b, c, d, e, f] = m;
   const det = a * d - b * c || 1e-12;
@@ -181,4 +190,10 @@ export function boxOfPoints(points: readonly (readonly [number, number])[]): Box
   const xs = points.map((p) => p[0]);
   const ys = points.map((p) => p[1]);
   return { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) };
+}
+
+/** Bounding box of `b` mapped through `m`. */
+export function transformBox(m: Matrix, b: Box): Box {
+  if (isEmptyBox(b)) return EMPTY_BOX;
+  return boxOfPoints(([[b.x0, b.y0], [b.x1, b.y0], [b.x1, b.y1], [b.x0, b.y1]] as const).map(([x, y]) => applyMatrix(m, x, y)));
 }

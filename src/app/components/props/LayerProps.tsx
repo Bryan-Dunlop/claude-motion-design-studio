@@ -59,8 +59,8 @@ export function LayerProps({ scene, layer, time }: { scene: Scene; layer: Layer;
       {layer.type === 'image' && <ImageSection scene={scene} layer={layer} fields={fields} />}
       {layer.type === 'cursor' && <CursorPanel layer={layer} scene={scene} />}
 
-      {/* Text animation (text) / Draw outline (shapes): collapsed unless in use. */}
-      {layer.type === 'text' && <TextAnimSection scene={scene} layer={layer} fields={fields} />}
+      {/* Text animation (text) / Draw outline (shapes): collapsed unless in use; keyed like Effects. */}
+      {layer.type === 'text' && <TextAnimSection key={`${layer.id}-textanim`} scene={scene} layer={layer} fields={fields} />}
 
       {/* Collapsed unless an effect is in use; keyed so each layer starts in its own open/closed state. */}
       <EffectsSection key={layer.id} scene={scene} layer={layer} fields={fields} />

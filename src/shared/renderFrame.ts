@@ -1,7 +1,7 @@
 // The one drawing function used by BOTH the editor preview and the MP4 export.
 // Output depends only on (project, time, scale, loaded resources): no clocks, no randomness, no state between frames.
 import { createRenderCanvas, type CanvasPool, type RenderCanvas } from './canvas';
-import { applyEffects, clampResolved, effectRegion, influenceRegion, layerEffects, type LayerEffects } from './effects';
+import { applyEffects, blurMargin, clampResolved, effectRegion, influenceRegion, layerEffects, type LayerEffects } from './effects';
 import {
   CURSOR_ARROW,
   CURSOR_OUTLINE,
@@ -9,22 +9,27 @@ import {
   cursorPress,
   cursorRipples,
   fontString,
+  inflateBox,
   intersectBox,
   isEmptyBox,
   layerBox,
   layerMatrix,
   lineX,
   measureText,
+  multiplyMatrix,
   roundOutBox,
   setLetterSpacing,
+  transformBox,
   translateBox,
   unionBox,
   type Box,
   type Ctx2D,
+  type Matrix,
 } from './geometry';
-import { inkBoundsResolved } from './inkBounds';
+import { AA_PAD, GLYPH_PAD, inkBoundsResolved } from './inkBounds';
 import { resolveLayer } from './interpolate';
 import type { CursorLayer, ImageLayer, Layer, Project, Scene, ShapeLayer, TextLayer } from './schema';
+import { textAnimating, textAnimFrame, type DrawUnit } from './textAnim';
 import { blurPad, directionalLayout, dissolve, TRANSITION_BLUR, zoomFactor, type DissolveSource } from './transitionDraw';
 import { partnerLocalTime, planTransitions, type TransitionPlan } from './transitions';
 
@@ -122,16 +127,65 @@ function isDark(hex: string): boolean {
 
 // ---------------------------------------------------------------- layer drawing
 
-function drawText(ctx: Ctx2D, layer: TextLayer) {
-  const m = measureText(ctx, layer);
+/**
+ * Text at layer-local time `local`. While a text animator runs, the units are drawn one by one (drawTextUnits);
+ * otherwise whole lines, exactly like v1. `device` is the context's current transform (render scale × layer matrix).
+ */
+function drawText(ctx: Ctx2D, layer: TextLayer, local: number, scale: number, device: Matrix) {
+  const anim = textAnimFrame(ctx, layer, local);
+  if (anim.units) drawTextUnits(ctx, layer, anim.units, scale, device);
+  else {
+    const m = measureText(ctx, layer);
+    ctx.font = fontString(layer);
+    setLetterSpacing(ctx, layer.letterSpacing);
+    ctx.fillStyle = layer.color;
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    m.lines.forEach((line, i) => {
+      ctx.fillText(line.text, lineX(layer.align, m.w, line.width), i * m.lineHeightPx + m.lineHeightPx / 2);
+    });
+  }
+  if (anim.caret) {
+    const c = anim.caret;
+    ctx.fillStyle = layer.color;
+    ctx.fillRect(c.x0, c.y0, c.x1 - c.x0, c.y1 - c.y0);
+  }
+}
+
+/**
+ * Draw text one unit at a time, each with its own opacity, offset/scale (about its centre) and blur. `device` is the
+ * context's current transform; the blur of each unit is k = scale × |layer scale| times its layer-px blur (chained when
+ * the in and out phases both blur) and is clipped to the area that unit can reach, since Chromium filters the whole clip
+ * region otherwise.
+ */
+export function drawTextUnits(ctx: Ctx2D, layer: TextLayer, units: readonly DrawUnit[], scale: number, device: Matrix) {
+  const k = scale * Math.abs(layer.scale);
+  const pad = layer.fontSize * GLYPH_PAD + layer.strokeWidth / 2;
   ctx.font = fontString(layer);
   setLetterSpacing(ctx, layer.letterSpacing);
   ctx.fillStyle = layer.color;
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'left';
-  m.lines.forEach((line, i) => {
-    ctx.fillText(line.text, lineX(layer.align, m.w, line.width), i * m.lineHeightPx + m.lineHeightPx / 2);
-  });
+  for (const u of units) {
+    const { alpha, s, tx, ty, blurs } = u.look;
+    if (!(alpha > 0) || !(s > 0) || !u.text.trim()) continue;
+    const radii = blurs.map((b) => b * k).filter((r) => r > 1e-3);
+    ctx.save();
+    if (radii.length) {
+      const spread = radii.reduce((sum, r) => sum + blurMargin(r), 0);
+      const c = roundOutBox(inflateBox(transformBox(multiplyMatrix(device, [s, 0, 0, s, tx, ty]), inflateBox(u.ink, pad)), AA_PAD + spread));
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.beginPath();
+      ctx.rect(c.x0, c.y0, c.x1 - c.x0, c.y1 - c.y0);
+      ctx.clip();
+      ctx.setTransform(device[0], device[1], device[2], device[3], device[4], device[5]);
+    }
+    ctx.globalAlpha *= alpha;
+    if (s !== 1 || tx !== 0 || ty !== 0) ctx.transform(s, 0, 0, s, tx, ty);
+    if (radii.length) ctx.filter = radii.map((r) => `blur(${r}px)`).join(' ');
+    ctx.fillText(u.text, u.x, u.y);
+    ctx.restore();
+  }
 }
 
 function roundRectPath(ctx: Ctx2D, w: number, h: number, r: number) {
@@ -184,8 +238,11 @@ function drawImage(ctx: Ctx2D, layer: ImageLayer, res: RenderResources) {
   ctx.stroke();
 }
 
-/** The layer's own drawing (no opacity, no effects), relative to the current transform. */
-function drawLayerBody(ctx: Ctx2D, layer: Layer, local: number, res: RenderResources) {
+/**
+ * The layer's own drawing (no opacity, no effects), relative to the current transform, which must be the project →
+ * canvas mapping (scale, 0, 0, scale, ox, oy).
+ */
+function drawLayerBody(ctx: Ctx2D, layer: Layer, local: number, res: RenderResources, scale: number, ox: number, oy: number) {
   if (layer.type === 'cursor') {
     drawCursor(ctx, layer, local);
     return;
@@ -193,7 +250,7 @@ function drawLayerBody(ctx: Ctx2D, layer: Layer, local: number, res: RenderResou
   const box = layerBox(ctx, layer);
   const m = layerMatrix(layer, box);
   ctx.transform(m[0], m[1], m[2], m[3], m[4], m[5]);
-  if (layer.type === 'text') drawText(ctx, layer);
+  if (layer.type === 'text') drawText(ctx, layer, local, scale, multiplyMatrix([scale, 0, 0, scale, ox, oy], m));
   else if (layer.type === 'shape') drawShape(ctx, layer);
   else drawImage(ctx, layer, res);
 }
@@ -203,12 +260,13 @@ function drawLayerBody(ctx: Ctx2D, layer: Layer, local: number, res: RenderResou
  * (a stroke's shadow lands inside its own fill, the cursor's shadow darkens its own arrow), so with an effect they are
  * drawn once into a scratch canvas and composited in one go.
  */
-function isMultiDraw(layer: Layer, res: RenderResources): boolean {
+function isMultiDraw(layer: Layer, local: number, res: RenderResources): boolean {
   switch (layer.type) {
     case 'shape':
       return layer.strokeWidth > 0;
     case 'text':
-      return layer.content.includes('\n') || layer.strokeWidth > 0;
+      // A running text animator draws unit by unit (and maybe a caret).
+      return layer.content.includes('\n') || layer.strokeWidth > 0 || textAnimating(layer, local);
     case 'cursor':
       return true;
     case 'image':
@@ -238,12 +296,12 @@ export function drawLayer(ctx: Ctx2D, rawLayer: Layer, layerLocal: number, res: 
     // No effects: exactly the v1 drawing (per-call opacity).
     ctx.save();
     ctx.globalAlpha *= Math.min(1, Math.max(0, layer.opacity));
-    drawLayerBody(ctx, layer, layerLocal, res);
+    drawLayerBody(ctx, layer, layerLocal, res, scale, ox, oy);
     ctx.restore();
     return;
   }
   const ink = translateBox(inkBoundsResolved(layer, layerLocal, scale, ctx), ox, oy);
-  if (isMultiDraw(layer, res)) drawIsolated(ctx, layer, layerLocal, res, scale, ox, oy, fx, ink);
+  if (isMultiDraw(layer, layerLocal, res)) drawIsolated(ctx, layer, layerLocal, res, scale, ox, oy, fx, ink);
   else drawDirect(ctx, layer, layerLocal, res, scale, ox, oy, fx, ink);
 }
 
@@ -254,7 +312,7 @@ function drawDirect(ctx: Ctx2D, layer: Layer, local: number, res: RenderResource
   if (fx.blur > 0) clipToBox(ctx, effectRegion(ink, fx), scale, ox, oy);
   applyEffects(ctx, fx);
   ctx.globalAlpha *= layer.opacity;
-  drawLayerBody(ctx, layer, local, res);
+  drawLayerBody(ctx, layer, local, res, scale, ox, oy);
   ctx.restore();
 }
 
@@ -272,7 +330,7 @@ function drawIsolated(ctx: Ctx2D, layer: Layer, local: number, res: RenderResour
   const area = roundOutBox(unionBox(content, intersectBox(region, frame)));
   const scratch = acquire(res, scratchSize(area.x1 - area.x0), scratchSize(area.y1 - area.y0));
   scratch.ctx.setTransform(scale, 0, 0, scale, ox - area.x0, oy - area.y0);
-  drawLayerBody(scratch.ctx, layer, local, res);
+  drawLayerBody(scratch.ctx, layer, local, res, scale, ox - area.x0, oy - area.y0);
   ctx.save();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   if (fx.blur > 0) {

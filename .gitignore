@@ -7,3 +7,4 @@ playwright-report/
 .DS_Store
 .e2e-workspace/
 .vite/
+.dev-workspace/

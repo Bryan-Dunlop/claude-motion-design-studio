@@ -9,7 +9,7 @@ import { emptyProject, ProjectSchema, type Asset, type AudioClip, type Layer, ty
 import { clockLabel, duplicateClipsAt, newClip } from './audio/clips';
 import { loadAudioInfo } from './audio/waveform';
 import { copyClips, copyKeys, copyLayers, pasteClips, pasteKeys, pasteKeysMessage, pasteLayers, type Clipboard, type CopiedKey, type PasteKeysResult } from './clipboard';
-import { deepCloneLayer, findLayer, useEditor } from './store';
+import { deepCloneLayer, findLayer, snapToFrame, useEditor } from './store';
 
 const S = () => useEditor.getState();
 
@@ -29,12 +29,30 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
 
 // ---------------------------------------------------------------- scenes
 
-/** A new, empty scene placed after the last one (or covering the whole project if it is the first). */
-function newScene(project: Project): Scene {
-  const lastEnd = Math.max(0, ...project.scenes.map((s) => s.start + s.duration));
-  const start = project.scenes.length === 0 ? 0 : Math.min(lastEnd, Math.max(0, project.settings.durationSec - 1));
-  const duration = Math.max(1, project.scenes.length === 0 ? project.settings.durationSec : Math.min(5, project.settings.durationSec - start));
-  return makeScene({ id: makeId('scene'), name: `Scene ${project.scenes.length + 1}`, start, duration, layers: [] });
+/**
+ * Where a new scene goes, so scenes follow each other (and a transition always has a scene to come from):
+ * - the first scene covers the whole video;
+ * - if there is room after the last scene, the new scene fills it;
+ * - otherwise the last scene is split — at the playhead when it is inside that scene, else in the middle.
+ * Layers are never deleted or shortened; only the split scene's length changes.
+ */
+function planNewScene(project: Project, time: number): { scene: Scene; split: { id: string; duration: number } | null } {
+  const { durationSec: total, fps } = project.settings;
+  const make = (start: number, duration: number) =>
+    makeScene({ id: makeId('scene'), name: `Scene ${project.scenes.length + 1}`, start, duration, layers: [] });
+  if (project.scenes.length === 0) return { scene: make(0, total), split: null };
+  const MIN = 0.5;
+  const last = project.scenes.reduce((a, b) => (b.start + b.duration > a.start + a.duration ? b : a));
+  const lastEnd = last.start + last.duration;
+  if (lastEnd <= total - MIN) return { scene: make(lastEnd, total - lastEnd), split: null };
+  if (last.duration >= 2 * MIN) {
+    const inside = time >= last.start + MIN && time <= lastEnd - MIN;
+    const at = snapToFrame(inside ? time : last.start + last.duration / 2, fps);
+    return { scene: make(at, lastEnd - at), split: { id: last.id, duration: at - last.start } };
+  }
+  // The last scene is too short to split: add a short scene at the end (may overlap it).
+  const start = Math.max(0, Math.min(lastEnd, total - MIN));
+  return { scene: make(start, Math.max(MIN, total - start)), split: null };
 }
 
 function showScene(scene: Scene) {
@@ -43,10 +61,20 @@ function showScene(scene: Scene) {
 }
 
 export function addScene() {
-  const scene = newScene(S().project);
-  S().commit((d) => void d.scenes.push(scene));
+  const { scene, split } = planNewScene(S().project, S().time);
+  S().commit((d) => {
+    if (split) {
+      const s = d.scenes.find((x) => x.id === split.id);
+      if (s) s.duration = split.duration;
+    }
+    d.scenes.push(scene);
+  });
   S().select({ sceneId: scene.id, layerIds: [], audioIds: [] });
   showScene(scene);
+  if (split) {
+    const name = S().project.scenes.find((x) => x.id === split.id)?.name ?? 'The previous scene';
+    S().toast(`${scene.name} starts at ${scene.start.toFixed(2)} s — ${name} now ends there.`);
+  }
   return scene.id;
 }
 
@@ -121,10 +149,15 @@ function baseLayer(name: string, scene: Scene, settings: Settings) {
 /** Add a layer to the target scene. If there is no scene yet, the scene is created in the same undo step. */
 function addLayer(make: (scene: Scene, settings: Settings) => Layer) {
   const existing = targetSceneId();
-  const created = existing ? null : newScene(S().project);
+  const plan = existing ? null : planNewScene(S().project, S().time);
+  const created = plan?.scene ?? null;
   const sceneId = existing ?? created!.id;
   let id = '';
   S().commit((d) => {
+    if (plan?.split) {
+      const s = d.scenes.find((x) => x.id === plan.split!.id);
+      if (s) s.duration = plan.split.duration;
+    }
     if (created) d.scenes.push(created);
     const scene = d.scenes.find((s) => s.id === sceneId) as Scene | undefined;
     if (!scene) return;
@@ -331,7 +364,7 @@ export function pasteClipboard(opts: { absolute?: boolean } = {}) {
     return;
   }
   const existing = targetSceneId();
-  const created = existing ? null : newScene(S().project);
+  const created = existing ? null : planNewScene(S().project, S().time).scene;
   const sceneId = existing ?? created!.id;
   let ids: string[] = [];
   S().commit((d) => {

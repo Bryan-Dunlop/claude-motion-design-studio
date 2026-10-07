@@ -12,6 +12,7 @@ import {
   animSpan,
   CARET,
   caretBlinkOn,
+  caretShows,
   composeLooks,
   easingRange,
   findStyle,
@@ -333,16 +334,23 @@ describe('caret', () => {
     expect([0, 0.2, 0.49, 0.5, 0.9, 1, 1.3, 1.7].map(caretBlinkOn)).toEqual([true, true, true, false, false, true, true, false]);
   });
 
+  it('like a real text cursor: solid while typing, blinking before and after (from the last keystroke)', () => {
+    // Typing from 0.7 s to 1.1 s: blinking from the layer's start before, solid while typing (0.9 s would blink off),
+    // then blinking again from the last keystroke (on until 1.6 s, off until 2.1 s).
+    expect([0, 0.6, 0.7, 0.9, 1.1, 1.5, 1.65, 2.1].map((t) => caretShows(t, 0.7, 1.1))).toEqual([true, false, true, true, true, true, false, true]);
+  });
+
   it('sits after the last visible character, at the start before anything is typed, and hides 1 s after the text is complete', () => {
     const l = text({ content: 'Hello', align: 'left', x: 0, y: 0, anchorX: 0, anchorY: 0, textIn: typewriter({ delay: 0.2 }) });
-    // Fake metrics: 10 px per character. Layer box at the origin, line middle at y = 36.
+    // Fake metrics: 10 px per character. Layer box at the origin, line middle at y = 36. Typing: 0.2–0.6 s.
     const fs = 60;
     caretRect(l, 0.1)!.forEach((v, i) => expect(v).toBeCloseTo([CARET.gap * fs, 36 - fs / 2, CARET.width * fs, fs][i], 10)); // before typing
     expect(caretRect(l, 0.35)![0]).toBeCloseTo(20 + CARET.gap * fs, 10); // 'He' typed
-    expect(caretRect(l, 0.7)).toBeNull(); // blinked off
-    expect(caretRect(l, 1.05)![0]).toBeCloseTo(50 + CARET.gap * fs, 10); // complete at 0.6 s, caret until 1.6 s
-    expect(caretRect(l, 1.4)![0]).toBeCloseTo(50 + CARET.gap * fs, 10);
-    expect(caretRect(l, 2.1)).toBeNull(); // window over (it would blink on at 2.0–2.5)
+    expect(caretRect(l, 0.55)![0]).toBeCloseTo(40 + CARET.gap * fs, 10); // still typing: solid (it used to blink off here)
+    expect(caretRect(l, 0.7)![0]).toBeCloseTo(50 + CARET.gap * fs, 10); // complete at 0.6 s: on for 0.5 s…
+    expect(caretRect(l, 1.2)).toBeNull(); // …then blinks off
+    expect(caretRect(l, 1.4)).toBeNull();
+    expect(caretRect(l, 1.55)).toBeNull(); // window over at 1.6 s
     expect(textAnimTiming(l, 2.1).caret).toBe(false);
     // No caret without the option, or for other effects.
     expect(caretRect(text({ ...l, textIn: typewriter({ caret: false }) }), 0.35)).toBeNull();

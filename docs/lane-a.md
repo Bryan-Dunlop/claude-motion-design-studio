@@ -1,5 +1,8 @@
 # Lane A — rendering engine (docs/v2-plan.md, Lane A)
 
+> **Build log.** Written while v2 was being built, so test counts, timings and a few statements describe that moment.
+> Later changes are marked *Later:*. `README.md` and the tests are the current reference.
+
 Status per feature, the user-facing behaviour in plain language, the exact tests that cover it, and measured numbers.
 Numbers were measured in this container (headless Chromium 141 with `--disable-gpu`, ffmpeg 6.1.1, 4 shared cores).
 
@@ -190,6 +193,8 @@ How it moves:
 - The caret is a bar after the last visible character (at the start before anything is typed), in the text colour,
   blinking once per second (on for the first half of each second of the layer's time). It disappears 1 s after the
   text is complete. With *Caret* on a typewriter-out, it appears 1 s before the deletion starts and stays to the end.
+  *Later:* like a real text cursor, it is solid while letters are typed or deleted and blinks only when idle, counted
+  from the last keystroke after typing (`caretShows`).
 - Text keeps its exact kerning while animating (each piece is drawn exactly where the whole line would put it); once
   everything has arrived, the text is drawn exactly as without animation (same pixels). Limitation: letter-by-letter
   pieces can't use ligatures / contextual alternates while they animate (Inter has none at default settings).

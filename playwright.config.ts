@@ -15,7 +15,7 @@ export default defineConfig({
     launchOptions: { args: ['--force-color-profile=srgb', '--disable-gpu'] },
   },
   webServer: {
-    command: 'npx tsx server/dev.ts',
+    command: 'node --import tsx server/dev.ts',
     url: `http://127.0.0.1:${PORT}/api/health`,
     env: { PORT: String(PORT), MOTION_WORKSPACE: '.e2e-workspace' },
     reuseExistingServer: false,

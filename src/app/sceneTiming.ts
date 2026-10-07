@@ -1,6 +1,7 @@
 // Scene timing edits that keep a scene's layers in step with it. Pure: they edit the draft the caller commits (one
 // undo step), or return numbers.
 import type { Draft } from 'immer';
+import { keepOutAtEnd } from '../shared/presets';
 import type { Layer, Project, Scene } from '../shared/schema';
 
 /** The longest video the project file allows (settings.durationSec). */
@@ -15,7 +16,8 @@ const clean = (v: number) => Math.round(v * 1e9) / 1e9;
  *   follows the layer's end) play before the cut instead of being cut off. It stays at least one frame long. A layer
  *   that starts at or after the new end is left as it is: it can't be seen either way.
  * - longer: a layer that ended at the old end (within half a frame) follows it.
- * - otherwise the length is kept. Keyframes are never moved or removed.
+ * - otherwise the length is kept.
+ * Keyframes are never removed; only "Out" preset keyframes move, with the layer's end (resizeScene, keepOutAtEnd).
  */
 export function followSceneEnd(layer: Pick<Layer, 'start' | 'duration'>, before: number, after: number, fps: number): number {
   const end = layer.start + layer.duration;
@@ -33,7 +35,7 @@ export function followSceneEnd(layer: Pick<Layer, 'start' | 'duration'>, before:
  * always ends where it would have from the start. Returns how many layers changed length.
  */
 export function resizeScene(scene: Draft<Scene>, duration: number, fps: number, origin: Scene = scene as Scene): number {
-  const before = new Map(origin.layers.map((l) => [l.id, { start: l.start, duration: l.duration }]));
+  const before = new Map(origin.layers.map((l) => [l.id, { start: l.start, duration: l.duration, keyframes: l.keyframes }]));
   let changed = 0;
   for (const layer of scene.layers) {
     const o = before.get(layer.id);
@@ -41,6 +43,7 @@ export function resizeScene(scene: Draft<Scene>, duration: number, fps: number, 
     const d = followSceneEnd(o, origin.duration, duration, fps);
     if (d !== o.duration) changed++;
     layer.duration = d;
+    layer.keyframes = keepOutAtEnd(o.keyframes, o.duration, d);
   }
   scene.duration = duration;
   return changed;
@@ -93,4 +96,10 @@ export function moveSceneInList(scenes: Draft<Scene>[], sceneId: string, delta: 
   scenes[i] = b;
   scenes[j] = a;
   return stacked ? 'stacked' : 'swapped';
+}
+
+/** Give a layer a new length (the Duration field); its "Out" preset keyframes move with its end (keepOutAtEnd). */
+export function setLayerDuration(layer: Draft<Layer>, duration: number) {
+  layer.keyframes = keepOutAtEnd(layer.keyframes, layer.duration, duration);
+  layer.duration = duration;
 }

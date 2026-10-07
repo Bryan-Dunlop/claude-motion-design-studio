@@ -12,7 +12,7 @@ import { ExportOptionsSchema, exportSize, type ExportOptions, type ExportOptions
 import { frameCount } from '../src/shared/renderFrame';
 import type { Asset, Project } from '../src/shared/schema';
 import { buildAudioArgs, type AudioArgs } from './audioMix';
-import { safeJoin } from './projects';
+import { renameWithRetry, safeJoin } from './projects';
 
 export type JobStatus = 'starting' | 'rendering' | 'encoding' | 'done' | 'error' | 'cancelled';
 
@@ -49,8 +49,12 @@ export interface ExportJob {
   reject: (e: Error) => void;
   /** Internal: resolves on ffmpeg's 'close' event (at once when ffmpeg never started). */
   ffmpegClosed: Promise<void>;
-  /** Internal: the file at outFile before the export, if any (the CLI may render over an older video). */
-  outFileBefore?: fs.Stats;
+  /**
+   * Internal: where ffmpeg writes (`<outFile>.part`). It gets the real name only once the video is complete, so an
+   * export stopped any way at all (even the server or the PC) never leaves a finished-looking but cut-short MP4, and
+   * an older video at outFile stays until the new one replaces it.
+   */
+  partFile: string;
   /** Internal: resolves cleanedUp (the first call counts). */
   settleCleanup: (done: Promise<void>) => void;
 }
@@ -125,6 +129,8 @@ export function ffmpegArgs(project: Project, outFile: string, audio: AudioArgs =
     '-c:v', 'libx264', '-preset', o.preset, '-crf', String(o.crf), '-pix_fmt', 'yuv420p',
     '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709',
     ...audio.codec,
+    // The muxer is named because the file being written is `<name>.mp4.part` (see ExportJob.partFile).
+    '-f', 'mp4',
     '-movflags', '+faststart',
     outFile,
   ];
@@ -161,8 +167,11 @@ export async function startExport(opts: {
   resolveAsset?: (asset: Asset) => string | null;
   /** Size, quality and audio (all optional; defaults = 100%, CRF 16 medium, with audio). */
   options?: ExportOptionsInput;
-  /** false: Ctrl+C is left to the caller (the CLI cancels and cleans up); by default Playwright closes Chromium and exits. */
-  handleSIGINT?: boolean;
+  /**
+   * false: Ctrl+C, a closed terminal window and `kill` are the caller's (the CLI and `npm run dev` cancel the export,
+   * which also deletes the unfinished file, then exit); by default Playwright just closes Chromium.
+   */
+  handleSignals?: boolean;
 }): Promise<ExportJob> {
   if (!ffmpegAvailable()) throw Object.assign(new Error(FFMPEG_HELP), { status: 424 });
   const options = ExportOptionsSchema.parse(opts.options ?? {});
@@ -192,7 +201,7 @@ export async function startExport(opts: {
     resolve,
     reject,
     ffmpegClosed: Promise.resolve(),
-    outFileBefore: fs.statSync(opts.outFile, { throwIfNoEntry: false }),
+    partFile: `${opts.outFile}.part`,
     settleCleanup,
   };
   jobs.set(job.id, job);
@@ -209,7 +218,7 @@ export async function startExport(opts: {
       fs.writeFileSync(graphFile, graph);
       audio = { ...audio, filter: [graphFileOption(ffmpegVersion()), graphFile, ...audio.filter.slice(2)] };
     }
-    ff = spawn(ffmpegBin(), ffmpegArgs(opts.project, opts.outFile, audio, options));
+    ff = spawn(ffmpegBin(), ffmpegArgs(opts.project, job.partFile, audio, options));
   } catch (e) {
     // E.g. E2BIG: a failed job with a plain message, not a 500 and a job stuck in 'starting'.
     if (graphFile) void removeQuietly(graphFile);
@@ -229,6 +238,15 @@ export async function startExport(opts: {
     clearInterval(job.watchdog);
     if (job.status === 'cancelled') return;
     if (code === 0 && job.status === 'encoding') {
+      try {
+        renameWithRetry(job.partFile, job.outFile);
+      } catch (e) {
+        // E.g. an older video of that name is open in a player (Windows locks it). The new one is complete: keep it.
+        job.status = 'error';
+        job.error = `The video is finished but could not be named ${path.basename(job.outFile)} (is that file open in another program?), so it was left as ${job.partFile}: ${(e as Error).message}`;
+        cleanup(job);
+        return reject(new Error(job.error));
+      }
       job.status = 'done';
       cleanup(job);
       resolve();
@@ -245,7 +263,9 @@ export async function startExport(opts: {
       headless: true,
       executablePath: process.env.CHROMIUM_PATH || undefined,
       args: ['--force-color-profile=srgb', '--disable-gpu'],
-      handleSIGINT: opts.handleSIGINT,
+      handleSIGINT: opts.handleSignals,
+      handleSIGTERM: opts.handleSignals,
+      handleSIGHUP: opts.handleSignals,
     });
     job.browser = browser;
     // A cancel or failure can land during any await: from then on only close the browser.
@@ -259,7 +279,7 @@ export async function startExport(opts: {
     page.on('crash', () => fail(job, `The render page crashed at frame ${job.frame}/${job.total} (out of memory?), so the export was stopped.`));
     if (job.status === 'starting') job.status = 'rendering';
     await page.goto(`${opts.baseUrl}/render.html?job=${job.id}`);
-  })().catch((e: Error) => fail(job, job.browser ? `The render page did not open: ${e.message}` : `Could not start headless Chromium: ${e.message}. Try: npx playwright install chromium`));
+  })().catch((e: Error) => fail(job, job.browser ? `The render page did not open: ${e.message}` : `Could not start headless Chromium: ${e.message}. Try: npx playwright install --only-shell chromium`));
 
   return job;
 }
@@ -378,10 +398,10 @@ export function finishFrames(job: ExportJob) {
  */
 function watchFlush(job: ExportJob) {
   const ms = Number(process.env.MOTION_FFMPEG_EXIT_TIMEOUT_MS) || FFMPEG_EXIT_TIMEOUT_MS;
-  let size = fileSize(job.outFile);
+  let size = fileSize(job.partFile);
   job.progressAt = Date.now();
   job.watchdog = setInterval(() => {
-    const now = fileSize(job.outFile);
+    const now = fileSize(job.partFile);
     if (now !== size) {
       size = now;
       job.progressAt = Date.now();
@@ -411,22 +431,30 @@ export function cancel(job: ExportJob) {
   job.reject(new Error('Export cancelled'));
 }
 
+/**
+ * The signals that stop the CLI or the server: Ctrl+C, Ctrl+Break (Windows), the terminal window closing (SIGHUP, also
+ * on Windows) and `kill`. Both cancel their exports first, so no unfinished file stays behind.
+ */
+export const STOP_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK'] as const;
+
+/**
+ * Cancel every export still running; resolves with how many were running once every job has let go of its files and
+ * processes (cleanedUp).
+ */
+export function cancelAll(): Promise<number> {
+  const running = [...jobs.values()].filter((j) => !isFinal(j));
+  for (const job of running) cancel(job);
+  return Promise.all([...jobs.values()].map((j) => j.cleanedUp)).then(() => running.length);
+}
+
 function cleanup(job: ExportJob, removeOutput = false) {
   clearInterval(job.watchdog);
   clearTimeout(job.stall);
   const browserClosed = closeBrowser(job.browser);
   if (removeOutput) job.ffmpeg?.kill('SIGKILL');
   // ffmpegClosed was set up when ffmpeg started, so this also works when ffmpeg has already exited by itself.
-  const outputGone = job.ffmpegClosed.then(() => (removeOutput ? removePartialOutput(job) : undefined));
+  const outputGone = job.ffmpegClosed.then(() => (removeOutput ? removeQuietly(job.partFile) : undefined));
   job.settleCleanup(Promise.all([outputGone, browserClosed]).then(() => undefined));
-}
-
-/** Delete the unfinished MP4, unless ffmpeg never got to it: then the file there (an older render) stays. */
-function removePartialOutput(job: ExportJob): Promise<void> {
-  const before = job.outFileBefore;
-  const now = fs.statSync(job.outFile, { throwIfNoEntry: false });
-  if (!now || (before && now.ino === before.ino && now.size === before.size && now.mtimeMs === before.mtimeMs)) return Promise.resolve();
-  return removeQuietly(job.outFile);
 }
 
 /** Close Chromium; resolves when it has closed, or after 5 s if it doesn't answer. */

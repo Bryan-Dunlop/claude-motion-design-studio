@@ -6,7 +6,7 @@ import path from 'node:path';
 import type { Project } from '../src/shared/schema';
 import { readProjectDir } from './projects';
 import { parseRenderArgs, RENDER_USAGE, type RenderArgs } from './cliArgs';
-import { cancel, FFMPEG_HELP, ffmpegAvailable, getJob, startExport, type ExportJob } from './exporter';
+import { cancel, FFMPEG_HELP, ffmpegAvailable, getJob, startExport, STOP_SIGNALS, type ExportJob } from './exporter';
 import { startServer } from './app';
 
 const argv = process.argv.slice(2);
@@ -43,8 +43,9 @@ let exitCode = 0;
 let job: ExportJob | undefined;
 try {
   const { options } = args;
-  // handleSIGINT false: Ctrl+C is ours (cancel, then wait for the cleanup), not Playwright's (close Chromium, exit).
-  job = await startExport({ project, projectDir, outFile, baseUrl: server.url, options, resolveAsset: (a) => server.workspace.resolveAsset(projectDir, a), handleSIGINT: false });
+  // handleSignals false: Ctrl+C, a closed window or `kill` are ours (cancel, then wait for the cleanup), not Playwright's
+  // (close Chromium, then exit or carry on).
+  job = await startExport({ project, projectDir, outFile, baseUrl: server.url, options, resolveAsset: (a) => server.workspace.resolveAsset(projectDir, a), handleSignals: false });
   const { width, height, fps } = project.settings;
   const { outW, outH } = job.size;
   const size = options.scale === 1 ? `${outW}x${outH}` : `${outW}x${outH} (${Math.round(options.scale * 100)}% of ${width}x${height})`;
@@ -56,13 +57,16 @@ try {
     process.stdout.write(`\r  ${j.status} ${j.frame}/${j.total} (${Math.round((100 * j.frame) / j.total)}%)   `);
   }, 500);
   let cancelling = false;
-  process.on('SIGINT', () => {
-    // A second Ctrl+C leaves at once (Playwright's exit handler still kills Chromium).
-    if (cancelling) process.exit(130);
-    cancelling = true;
-    console.log('\nCancelling…');
-    cancel(getJob(id)!);
-  });
+  // Ctrl+C, Ctrl+Break, the terminal window closing, or `kill`.
+  for (const signal of STOP_SIGNALS) {
+    process.on(signal, () => {
+      // A second Ctrl+C leaves at once (Playwright's exit handler still kills Chromium).
+      if (cancelling) process.exit(130);
+      cancelling = true;
+      console.log('\nCancelling…');
+      cancel(getJob(id)!);
+    });
+  }
   const shown = job.warnings.length;
   try {
     await job.finished;

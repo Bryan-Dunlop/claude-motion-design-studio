@@ -104,6 +104,26 @@ export function applyPreset(layer: Layer, params: PresetParams): Record<string, 
   return result;
 }
 
+/**
+ * "Out" preset keyframes belong to the layer's end. When a layer's length changes from `before` to `after` (a trimmed
+ * bar, the Duration field, a scene that gets shorter or longer), they move with the end — keyframe times count from the
+ * layer's start — but never before the start. Every other keyframe stays where it is. Returns `keyframes` itself when
+ * nothing moves.
+ */
+export function keepOutAtEnd(keyframes: Record<string, Keyframe[]>, before: number, after: number): Record<string, Keyframe[]> {
+  const tag = sourceTag('out');
+  const shift = after - before;
+  const isOut = (k: Keyframe) => k.source === tag;
+  if (shift === 0 || !Object.values(keyframes).some((keys) => keys.some(isOut))) return keyframes;
+  const result: Record<string, Keyframe[]> = {};
+  for (const [prop, keys] of Object.entries(keyframes)) {
+    result[prop] = keys.some(isOut)
+      ? keys.map((k) => (isOut(k) ? { ...k, time: Math.max(0, Math.round((k.time + shift) * 1e9) / 1e9) } : k)).sort((a, b) => a.time - b.time)
+      : keys;
+  }
+  return result;
+}
+
 // ---------------------------------------------------------------- stagger
 
 export type StaggerOrder = 'forward' | 'reverse' | 'random';

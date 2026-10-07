@@ -1,4 +1,6 @@
 import type { Layer, Scene } from '../../../shared/schema';
+import { updateLayers } from '../../actions';
+import { setLayerDuration } from '../../sceneTiming';
 import { layerLocalTime, useEditor } from '../../store';
 import { NumberField, Row, Section, TextField } from '../Fields';
 import { useLayerFields } from './common';
@@ -32,8 +34,8 @@ export function LayerProps({ scene, layer, time }: { scene: Scene; layer: Layer;
         <Row label="Start" tip="When the layer appears, in seconds after its scene starts.">
           <NumberField value={layer.start} step={0.1} min={0} onCommit={(v) => setStatic({ start: v })} testId="prop-start" />
         </Row>
-        <Row label="Duration" tip="How long the layer stays on screen, in seconds.">
-          <NumberField value={layer.duration} step={0.1} min={1 / fps} onCommit={(v) => setStatic({ duration: v })} testId="prop-duration" />
+        <Row label="Duration" tip="How long the layer stays on screen, in seconds. Fade/slide/scale Out presets move with its end.">
+          <NumberField value={layer.duration} step={0.1} min={1 / fps} onCommit={(v) => updateLayers([layer.id], (l) => setLayerDuration(l, v))} testId="prop-duration" />
         </Row>
       </Section>
 

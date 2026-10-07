@@ -15,13 +15,18 @@ concurrency:
 
 jobs:
   test:
-    name: test (${{ matrix.os }})
+    name: test (${{ matrix.os }}, Node ${{ matrix.node }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        include:
+          # The Node.js LTS that the README's `winget install OpenJS.NodeJS.LTS` installs.
+          - { os: windows-latest, node: 24 }
+          - { os: ubuntu-latest, node: 24 }
+          # The oldest Node.js the README and package.json allow (Vite needs 22.12+).
+          - { os: ubuntu-latest, node: '22.12' }
     env:
       # `npm ci` must not download Chromium itself (scripts/postinstall.mjs); the cached install step below does it.
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
@@ -29,11 +34,11 @@ jobs:
       FFMPEG_WIN_BUILD: ffmpeg-n8.1-latest-win64-gpl-8.1
       PW_VERSION: 1.56.1
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: ${{ matrix.node }}
           cache: npm
 
       # Neither runner image ships ffmpeg, and the exporter and the tests call bare `ffmpeg` / `ffprobe`.
@@ -46,7 +51,7 @@ jobs:
       - name: Restore ffmpeg (Windows)
         if: runner.os == 'Windows'
         id: ffmpeg-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: ${{ runner.temp }}\ffmpeg
           key: ${{ env.FFMPEG_WIN_BUILD }}
@@ -76,7 +81,7 @@ jobs:
 
       - name: Save ffmpeg (Windows)
         if: runner.os == 'Windows' && steps.ffmpeg-download.outcome == 'success'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: ${{ runner.temp }}\ffmpeg
           key: ${{ env.FFMPEG_WIN_BUILD }}
@@ -101,7 +106,7 @@ jobs:
 
       - name: Restore Playwright Chromium
         id: pw-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: ${{ runner.os == 'Windows' && '~\AppData\Local\ms-playwright' || '~/.cache/ms-playwright' }}
           key: playwright-${{ runner.os }}-${{ env.PW_VERSION }}-chromium-headless-shell
@@ -117,7 +122,7 @@ jobs:
 
       - name: Save Playwright Chromium
         if: steps.pw-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: ${{ runner.os == 'Windows' && '~\AppData\Local\ms-playwright' || '~/.cache/ms-playwright' }}
           key: playwright-${{ runner.os }}-${{ env.PW_VERSION }}-chromium-headless-shell
@@ -134,11 +139,29 @@ jobs:
           # The test server (server/dev.ts) also writes everything it prints here.
           MOTION_LOG_FILE: ${{ runner.temp }}/e2e-server.log
 
+      # What the README tells Windows users to double-click: it must install (here: nothing new), build the editor and
+      # serve it. BROWSER=none: no browser to open on the runner.
+      - name: Start Motion Studio.cmd (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          BROWSER: none
+        run: |
+          $p = Start-Process cmd.exe -ArgumentList '/d /s /c ""Start Motion Studio.cmd" > launcher.log 2>&1 < NUL"' -PassThru -WindowStyle Hidden
+          $ok = $false
+          for ($i = 0; $i -lt 120 -and -not $ok; $i++) {
+            Start-Sleep -Seconds 1
+            try { $ok = (Invoke-WebRequest http://127.0.0.1:5173/ -UseBasicParsing -TimeoutSec 2).Content -match '/assets/main-' } catch {}
+          }
+          taskkill /T /F /PID $p.Id | Out-Null
+          Get-Content launcher.log
+          if (-not $ok) { throw 'Start Motion Studio.cmd did not serve the built editor within 2 minutes' }
+
       - name: Upload test results and the server log
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
-          name: test-results-${{ matrix.os }}
+          name: test-results-${{ matrix.os }}-node${{ matrix.node }}
           path: |
             test-results/
             ${{ runner.temp }}/e2e-server.log

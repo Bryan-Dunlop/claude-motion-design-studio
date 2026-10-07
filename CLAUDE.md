@@ -7,7 +7,10 @@ docs/v2-plan.md for the current feature spec.
 ## Commands
 
 ```bash
-npm run dev            # http://127.0.0.1:5173 (PORT, MOTION_WORKSPACE env vars)
+npm run dev            # http://127.0.0.1:5173 with live reload (PORT, MOTION_WORKSPACE env vars)
+npm start              # for users: serves the editor built into dist/ (rebuilt when src/ changes) and opens the
+                       # browser; no Vite client in the page, so a server restart can't reload the editor and lose work.
+                       # Start Motion Studio.cmd runs it on Windows (npm install first when needed)
 npm run typecheck      # tsc --noEmit (TypeScript 7)
 npm run test:unit      # vitest, tests/unit/**
 npm run test:e2e       # Playwright, tests/e2e/** — starts its own server on E2E_PORT (default 5199), workspace .e2e-workspace/
@@ -41,7 +44,10 @@ Chromium for Playwright is preinstalled in cloud sessions (`PLAYWRIGHT_BROWSERS_
   `components/` (Preview, Timeline, Properties, LayersPanel, Dialogs, Fields).
 - `src/render/main.ts` — render-only page used by export (`?job=<id>`) and by tests (`window.motion.render(...)`).
 - `server/` — `app.ts` (routes + Vite middleware on the same http server), `projects.ts` (workspace, zip, safe paths),
-  `exporter.ts` (Chromium + ffmpeg jobs), `render-cli.ts`, `dev.ts`.
+  `exporter.ts` (Chromium + ffmpeg jobs), `audioMix.ts` (ffmpeg audio graph), `render-cli.ts`, `dev.ts` (start-up,
+  stop signals), `startup.ts` (default workspace `~/Motion Studio`, port messages, opening the browser, building dist/
+  for `npm start`).
+- `scripts/` — `postinstall.mjs` (install stamp + headless Chromium), `needs-install.mjs` (the launcher's check).
 - `window.__motion.useEditor` exposes the store for Playwright tests.
 
 ## Testing conventions and gotchas (learned the hard way)
@@ -53,6 +59,9 @@ Chromium for Playwright is preinstalled in cloud sessions (`PLAYWRIGHT_BROWSERS_
 - Use `startDrag`-style mouse sequences with several `mouse.move` steps; drags have a 2 px threshold.
 - E2E tests must use unique project names (`Date.now()`), since `.e2e-workspace/` persists between runs.
 - Express `res.sendFile`/`download` need `{ dotfiles: 'allow' }` because the scratch store is `.scratch/`.
+- ffmpeg writes `<out>.mp4.part`; the exporter renames it when the video is complete. A test that looks for the file
+  during an export must look for `.part`. The server and the CLI handle SIGINT/SIGTERM/SIGHUP themselves (cancel, so the
+  `.part` file is deleted, then exit); startExport's `handleSignals: false` keeps Playwright's handlers out of it.
 - Sending frames from the render page: a `Blob` body is ~10× faster than a typed array.
 - ffmpeg colour: keep `flags=accurate_rnd+full_chroma_int(+full_chroma_inp)` on scale filters or colours shift by ~2 levels.
 - Run e2e from a lane worktree with its own `E2E_PORT` so parallel runs don't collide.

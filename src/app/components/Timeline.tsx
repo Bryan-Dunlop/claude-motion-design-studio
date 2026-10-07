@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { propLabel } from '../../shared/propLabels';
+import { keepOutAtEnd } from '../../shared/presets';
 import { ANIMATABLE, type Layer, type Scene } from '../../shared/schema';
 import { startDrag } from '../drag';
 import { clampTimelineHeight, usePrefs } from '../prefs';
@@ -128,9 +129,10 @@ export function Timeline() {
     if (l.locked) return;
     const sc = scene!;
     const moving = sc.layers.filter((x) => ids.includes(x.id) && !x.locked);
-    const origin = new Map(moving.map((x) => [x.id, { start: x.start, duration: x.duration }]));
+    const origin = new Map(moving.map((x) => [x.id, { start: x.start, duration: x.duration, keyframes: x.keyframes }]));
     const abs = (x: Layer) => sc.start + x.start;
-    // Keyframes and clicks are layer-relative: they move with a moved bar or a trimmed start.
+    // Keyframes and clicks are layer-relative: they move with a moved bar or a trimmed start. "Out" presets stay at the
+    // layer's end whichever edge is trimmed (keepOutAtEnd).
     const bars = new Set(mode === 'move' ? moving.map((x) => x.id) : [l.id]);
     const snap = timeSnapper({
       edges: mode === 'move' ? moving.flatMap((x) => [abs(x), abs(x) + x.duration]) : mode === 'start' ? [abs(l)] : [abs(l) + l.duration],
@@ -152,6 +154,7 @@ export function Timeline() {
               layer.duration = o.start + o.duration - ns;
               layer.start = ns;
             }
+            if (mode !== 'move' && layer.id === l.id) layer.keyframes = keepOutAtEnd(o.keyframes, o.duration, layer.duration);
           }
         });
       },

@@ -11,24 +11,31 @@ only when you click **Export MP4** (or run the CLI).
 
 ## Install
 
-You need **Node.js 20.6+** (tested with 22 and 24), **ffmpeg** on your PATH, and a desktop browser (Chrome or Edge
-recommended).
+You need **Node.js 22.12 or newer** (the current LTS, 24, is recommended), **ffmpeg** on your PATH, and a desktop
+browser (Chrome or Edge recommended).
 
 ### Windows 10 / 11, step by step
 
+Type the commands below in **Command Prompt** (press Start, type `cmd`, press Enter). In PowerShell, `npm` can stop
+with "running scripts is disabled on this system"; if you prefer PowerShell, run
+`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` there once.
+
 1. Install Node.js LTS: `winget install OpenJS.NodeJS.LTS` (or download it from nodejs.org).
 2. Install ffmpeg: `winget install --id Gyan.FFmpeg`.
-3. **Close and reopen** your terminal so the new PATH is picked up.
-4. Check both: `node -v` should print v20.6 or higher, and `ffmpeg -version` should print a version banner.
+3. **Close and reopen** Command Prompt so the new PATH is picked up.
+4. Check both: `node -v` should print v22.12 or higher, and `ffmpeg -version` should print a version banner.
 5. Get the code. On this repository's GitHub page click the green **Code** button → **Download ZIP**, right-click the
-   downloaded file → **Extract All…**, and move the extracted folder to a short path such as
-   `C:\Users\<you>\motion-studio`. That folder — the one with `package.json` directly inside it — is the **project
-   folder**. (With Git installed you can instead run `git clone <repository URL> C:\Users\<you>\motion-studio`, and later
-   update with `git pull`.)
-6. Go into it: `cd C:\Users\<you>\motion-studio` (check with `dir package.json`).
-7. Run `npm install`. This also downloads the headless Chromium build that export uses (about 150 MB, one time).
-8. Run `npm run dev`.
-9. Open **http://127.0.0.1:5173** in Chrome or Edge.
+   downloaded file → **Extract All…**, and move the extracted folder to a short path such as `C:\MotionStudio`. That
+   folder — the one with `package.json` and `Start Motion Studio.cmd` directly inside it — is the **app folder**.
+   (With Git installed you can instead run `git clone <repository URL> C:\MotionStudio`.)
+6. Double-click **Start Motion Studio.cmd** in the app folder. The first time, it installs what the app needs (about
+   200 MB, a few minutes) and prepares the editor; then it opens the editor in your browser at
+   **http://127.0.0.1:5173**.
+7. Keep the black Motion Studio window open while you work, and close it to stop Motion Studio. Next time, just
+   double-click **Start Motion Studio.cmd** again.
+
+The same by hand, in Command Prompt: `cd C:\MotionStudio`, then `npm install` (the first time and after updates), then
+`npm start`.
 
 ### macOS / Linux
 
@@ -36,13 +43,38 @@ recommended).
 git clone <repository URL> motion-studio && cd motion-studio
 brew install ffmpeg        # or: sudo apt install ffmpeg
 npm install
-npm run dev                # → http://127.0.0.1:5173
+npm start                  # opens http://127.0.0.1:5173
 ```
 
-If the Chromium download fails (corporate proxy, offline machine), run `npx playwright install chromium` later.
-Editing works without it; only export needs it.
+If the Chromium download fails (corporate proxy, offline machine), run `npx playwright install --only-shell chromium`
+later. Editing works without it; only export needs it.
 
-Projects are saved in `./workspace/` by default. Set `MOTION_WORKSPACE=<folder>` to use a different location.
+### Where your projects are
+
+Projects and exported videos are saved in a **Motion Studio** folder in your home folder (on Windows
+`C:\Users\<you>\Motion Studio`, videos in its `exports` folder). That is outside the app folder, so updating or
+deleting the app never touches them. The Motion Studio window and the Open dialog show the exact place.
+
+To use another folder, set `MOTION_WORKSPACE` before starting: in Command Prompt `set MOTION_WORKSPACE=D:\Videos\Motion`
+then `npm start`; on macOS/Linux `MOTION_WORKSPACE=~/Videos/Motion npm start`. (An app folder that already has projects
+in its own `workspace` folder, the location before, keeps using that.)
+
+### Updating
+
+Download the new ZIP and extract it over the old app folder (or into a new one), or run `git pull` in it. Then
+double-click **Start Motion Studio.cmd**: it installs anything new and prepares the new editor by itself (by hand:
+`npm install`, then `npm start`). Your projects stay where they are.
+
+### If something goes wrong
+
+- **"Port 5173 is already in use by another program"**: another program has the port Motion Studio uses. Start it on
+  another one: in Command Prompt `set PORT=5174` then `npm start` (PowerShell: `$env:PORT=5174`). Starting Motion
+  Studio a second time is fine: it just points to the one already running.
+- **"Motion Studio isn't running any more"** in the editor: its window was closed. Start it again; the open tab keeps
+  your work (it doesn't reload), so save it once Motion Studio is back.
+- Closing the window or pressing Ctrl+C during an export cancels it and deletes the unfinished file. If the computer
+  stopped hard in the middle of an export, you may find a `<name>.mp4.part` file in `exports`: that is the unfinished
+  export, and you can delete it.
 
 ---
 
@@ -95,7 +127,8 @@ a keyframe at the playhead. Properties without keyframes just change their value
 
 ## Save / Open
 
-- **Save** writes a folder `workspace/<name>.motion/` with `project.json` (validated with zod) and `assets/`.
+- **Save** writes a folder `<name>.motion/` in your projects folder (see *Where your projects are*), with
+  `project.json` (validated with zod) and `assets/`.
   Projects made with v1 open automatically (they are upgraded on load).
 - **Imported files are copied byte-for-byte** (named `<sha256 prefix>-<original name>`), never re-encoded.
 - **Unsaved changes** show a ● next to the project name and in the tab title; closing the tab warns you.
@@ -109,13 +142,14 @@ a keyframe at the playhead. Properties without keyframes just change their value
 
 **From the app:** click **Export MP4**, pick *Size* (100 % / 50 % / 25 %, with the real pixel size shown), *Quality*
 (Best / Good / Draft) and *Include audio*, then **Start export**. A progress bar and **Cancel** appear; the file goes to
-`workspace/exports/<name>-<W>x<H>-<date-time>.mp4` and is offered as a download. Your choices are remembered.
+`exports/<name>-<W>x<H>-<date-time>.mp4` in your projects folder and is offered as a download. While it is being made it
+is called `….mp4.part`; it gets its real name only when it is complete. Your choices are remembered.
 
-**From a terminal** (same pipeline, no editor UI):
+**From a terminal** (same pipeline, no editor UI; the Export dialog shows the exact command for the open project):
 
 ```bash
-npm run render -- "workspace/My project.motion" out.mp4
-npm run render -- "workspace/My project.motion" draft.mp4 --scale 0.5 --crf 26 --preset veryfast --no-audio
+npm run render -- "C:\Users\<you>\Motion Studio\My project.motion" out.mp4
+npm run render -- "$HOME/Motion Studio/My project.motion" draft.mp4 --scale 0.5 --crf 26 --preset veryfast --no-audio
 ```
 
 **How it works:** the server opens headless Chromium on a render-only page that waits for fonts and images, then draws
@@ -167,7 +201,8 @@ timeline, playback, SVG/font import, cursor paths; v1 projects open in v2.
 - **Editing fields** — a typed value lands on the item it was typed for (as its own undo step) whatever you click
   next; Escape cancels it; Ctrl+S saves it; undo/redo/Delete work right after picking from a dropdown or a colour.
 - **Scenes & project** — a scene that gets shorter ("+ Scene", Duration, timeline trim) ends its layers with it, so
-  exit animations still play; a duplicated scene goes after the last one; ↑/↓ in the Scenes list change when scenes
+  exit animations still play; fade/slide/scale Out presets follow a layer's end when it gets longer or shorter
+  (Duration field, either bar edge, the scene's end); a duplicated scene goes after the last one; ↑/↓ in the Scenes list change when scenes
   play; Resolution presets scale the whole composition; the toolbar stays on one row at 1280×720.
 - **Projects on disk** — folders renamed or copied by hand open as themselves; a full disk never leaves a cut-off file
   behind; re-importing your own .zip works whatever the name; the local API refuses other sites.
@@ -176,10 +211,19 @@ timeline, playback, SVG/font import, cursor paths; v1 projects open in v2.
 - **When an export goes wrong** — a crashed or frozen render page, ffmpeg dying or stuck, Ctrl+C in the CLI: the export
   stops with a plain message and leaves no half-written MP4; a slow but healthy finish (slow preset, 4K) is not cut
   off; 1200 click sounds export; a mistyped project folder gets one plain line from the CLI.
+- **Starting and stopping** — `npm start` serves the built editor, exports from it, and a restart of the server never
+  reloads the open tab; started a second time, it points to the one already running; a port another program holds
+  gets a plain message; Ctrl+C, closing the window or `kill` during an export cancels it and deletes the
+  unfinished file, and even a hard stop never leaves a file under the finished video's name; Save, Open and the Export
+  dialog say plainly when Motion Studio has stopped, and the work in the tab is kept; the launcher's install check;
+  projects live outside the app folder.
 
 ## Not implemented
 
 - Video clips as layers, AI generation, cloud sync (listed as "Not available" under "More ▾").
+- Animating the anchor point (it is one fixed value per layer).
+- Changing a property of several layers at once: with more than one layer selected, Properties offers presets,
+  stagger and the keyframe tools only.
 - Arrow-key navigation in toolbar menus; copy/paste between browser tabs (the clipboard is per tab).
 
 ## Known limitations
@@ -197,8 +241,8 @@ timeline, playback, SVG/font import, cursor paths; v1 projects open in v2.
 - **Right-to-left text** (Hebrew, Arabic) animates by word or letter in place. A line that mixes right-to-left and
   left-to-right words — or digits, when animating by letter — animates as one whole line.
 - **Format copy** scales and centres; it doesn't re-arrange layouts for the new shape.
-- **Shortening a scene** ends its layers with it and text animations follow, but keyframes stay where they are: an Out
-  preset applied before the cut has to be applied again.
+- **Changing a layer's length** (or its scene's) moves its Out presets and text *Animate out* with its end; other
+  keyframes stay where they are, so a keyframe past the new end no longer plays.
 - **Undo history** lives in memory only and resets when you open a project.
 - **Test hook:** the editor exposes its store on `window.__motion` (used by the Playwright tests).
 
@@ -225,6 +269,7 @@ vectors at the target size, and the preview, the PNG still and the MP4 come from
 ## Development
 
 ```bash
+npm run dev            # like npm start, but with live reload (code changes reload the page) and no browser opening
 npm run typecheck
 npm run test:unit      # vitest
 npm run test:e2e       # Playwright (own server on E2E_PORT, default 5199; workspace .e2e-workspace/)

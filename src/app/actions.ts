@@ -14,8 +14,20 @@ import { deepCloneLayer, findLayer, snapToFrame, useEditor } from './store';
 
 const S = () => useEditor.getState();
 
+/** What a request says when the server can't be reached at all (its window was closed, or the computer restarted). */
+export const SERVER_GONE = "Motion Studio isn't running any more (was its window closed?). Start it again, then try again: nothing in this tab is lost.";
+
+/** fetch, failing with SERVER_GONE instead of the browser's "Failed to fetch" when the server can't be reached. */
+async function serverFetch(url: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (e) {
+    throw e instanceof TypeError ? new Error(SERVER_GONE) : e;
+  }
+}
+
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(url, init);
+  const r = await serverFetch(url, init);
   if (!r.ok) {
     let msg = `${r.status} ${r.statusText}`;
     try {
@@ -712,11 +724,16 @@ export function newProject() {
 
 export async function downloadZip() {
   const { project, projectName } = S();
-  const r = await fetch('/api/zip', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ project, name: projectName }),
-  });
+  let r: Response;
+  try {
+    r = await serverFetch('/api/zip', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project, name: projectName }),
+    });
+  } catch (e) {
+    return S().toast(`Zip export failed: ${(e as Error).message}`, 'error');
+  }
   if (!r.ok) return S().toast('Zip export failed', 'error');
   const blob = await r.blob();
   const a = document.createElement('a');

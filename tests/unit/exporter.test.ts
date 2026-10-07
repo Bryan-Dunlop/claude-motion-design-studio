@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { PassThrough, Writable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { acceptFrame, cancel, finishFrames, graphFileOption, startExport, type ExportJob as Job } from '../../server/exporter';
+import { acceptFrame, cancel, cancelAll, finishFrames, graphFileOption, startExport, type ExportJob as Job } from '../../server/exporter';
 import { makeLayer, makeProject } from '../../src/shared/factories';
 import { emptyProject, type Project } from '../../src/shared/schema';
 
@@ -35,9 +35,18 @@ class FakeFfmpeg extends EventEmitter {
     return true;
   }
 
-  /** Ends like a real process: exit code and signal first, the 'exit' and 'close' events a moment later. */
+  /** The file it writes (its last argument). */
+  get output() {
+    return this.args[this.args.length - 1];
+  }
+
+  /**
+   * Ends like a real process: exit code and signal first, the 'exit' and 'close' events a moment later. Like a real
+   * ffmpeg, one that succeeds has written its output file.
+   */
   exit(code: number | null, signal: NodeJS.Signals | null = null) {
     if (this.exitCode !== null || this.signalCode !== null) return;
+    if (code === 0 && !fs.existsSync(this.output)) fs.writeFileSync(this.output, 'the video');
     this.exitCode = code;
     this.signalCode = signal;
     setImmediate(() => {
@@ -149,7 +158,7 @@ describe('after the last frame, while ffmpeg finishes the video', () => {
     await allFrames(job);
     finishFrames(job);
     for (let i = 0; i < 20; i++) {
-      fs.appendFileSync(job.outFile, Buffer.alloc(4096));
+      fs.appendFileSync(job.partFile, Buffer.alloc(4096));
       await vi.advanceTimersByTimeAsync(500);
     }
     expect(job.status).toBe('encoding');
@@ -253,22 +262,65 @@ describe('while starting and rendering', () => {
 });
 
 describe('the partial MP4 of a failed or cancelled export', () => {
+  it('is written as <name>.mp4.part: the real name only ever holds a complete video', async () => {
+    const job = await start();
+    await rendering(job);
+    expect(job.partFile).toBe(path.join(dir, 'out.mp4.part'));
+    expect(ff.output).toBe(job.partFile);
+    expect(ff.args.slice(-5)).toEqual(['-f', 'mp4', '-movflags', '+faststart', job.partFile]);
+    fs.writeFileSync(job.partFile, 'half a video');
+    await allFrames(job);
+    finishFrames(job);
+    expect(fs.existsSync(job.outFile)).toBe(false);
+    ff.exit(0);
+    await job.finished;
+    expect(fs.readFileSync(job.outFile, 'utf8')).toBe('half a video');
+    expect(fs.existsSync(job.partFile)).toBe(false);
+  });
+
   it('is removed when ffmpeg fails by itself (e.g. disk full)', async () => {
     const job = await start();
     await rendering(job);
-    fs.writeFileSync(job.outFile, 'partial');
+    fs.writeFileSync(job.partFile, 'partial');
     ff.stderr.write('[vost#0:0/libx264] Error submitting a packet to the muxer: No space left on device\n');
     ff.exit(228);
     await expect(job.finished).rejects.toThrow('ffmpeg exited with code 228: [vost#0:0/libx264] Error submitting a packet to the muxer: No space left on device');
     await job.cleanedUp;
+    expect(fs.existsSync(job.partFile)).toBe(false);
     expect(fs.existsSync(job.outFile)).toBe(false);
+  });
+
+  it('an older video at the output path (the CLI can render over one) stays when the new export fails', async () => {
+    fs.writeFileSync(path.join(dir, 'out.mp4'), 'last week\'s video');
+    const job = await start();
+    await rendering(job);
+    fs.writeFileSync(job.partFile, 'partial');
+    ff.exit(1);
+    await expect(job.finished).rejects.toThrow('ffmpeg exited with code 1');
+    await job.cleanedUp;
+    expect(fs.readFileSync(job.outFile, 'utf8')).toBe('last week\'s video');
+    expect(fs.existsSync(job.partFile)).toBe(false);
+  });
+
+  it('a finished video that cannot take its name is kept as .part, with a plain message', async () => {
+    const job = await start();
+    await rendering(job);
+    await allFrames(job);
+    finishFrames(job);
+    // Something in the way that Windows' retries can't wait out (here: a folder of that name).
+    fs.mkdirSync(path.join(job.outFile, 'x'), { recursive: true });
+    ff.exit(0);
+    await expect(job.finished).rejects.toThrow(`The video is finished but could not be named out.mp4 (is that file open in another program?), so it was left as ${job.partFile}: `);
+    await job.cleanedUp;
+    expect(job.status).toBe('error');
+    expect(fs.readFileSync(job.partFile, 'utf8')).toBe('the video');
   });
 
   it('is removed after a cancel once ffmpeg has exited, and cleanedUp waits for that', async () => {
     const job = await start();
     await rendering(job);
-    fs.writeFileSync(job.outFile, 'partial');
     ff.diesOnKill = false;
+    fs.writeFileSync(job.partFile, 'partial');
     cancel(job);
     expect(ff.signals).toEqual(['SIGKILL']);
     let cleaned = false;
@@ -277,6 +329,7 @@ describe('the partial MP4 of a failed or cancelled export', () => {
     expect(cleaned).toBe(false);
     ff.exit(null, 'SIGKILL');
     await job.cleanedUp;
+    expect(fs.existsSync(job.partFile)).toBe(false);
     expect(fs.existsSync(job.outFile)).toBe(false);
     expect(job.status).toBe('cancelled');
   });
@@ -286,11 +339,38 @@ describe('the partial MP4 of a failed or cancelled export', () => {
     await rendering(job);
     await allFrames(job);
     finishFrames(job);
-    fs.writeFileSync(job.outFile, 'the video');
+    fs.writeFileSync(job.partFile, 'the video');
     ff.exit(0);
     await job.finished;
     await job.cleanedUp;
     expect(fs.readFileSync(job.outFile, 'utf8')).toBe('the video');
+  });
+});
+
+describe('cancelAll (the server or the CLI is being stopped)', () => {
+  it('cancels every running export and resolves once their unfinished files are gone', async () => {
+    const a = await start();
+    const first = ff;
+    await rendering(a);
+    browser = new FakeBrowser();
+    const b = await startExport({ project: tiny, projectDir: null, outFile: path.join(dir, 'b.mp4'), baseUrl: 'http://127.0.0.1:1' });
+    await until(() => browser.page.goto.mock.calls.length > 0);
+    for (const [job, f] of [[a, first], [b, ff]] as const) {
+      fs.writeFileSync(job.partFile, 'partial');
+      f.diesOnKill = false;
+    }
+    let count: number | undefined;
+    void cancelAll().then((n) => (count = n));
+    expect([a.status, b.status]).toEqual(['cancelled', 'cancelled']);
+    await until(() => first.signals.length > 0 && ff.signals.length > 0);
+    expect(count).toBeUndefined();
+    first.exit(null, 'SIGKILL');
+    ff.exit(null, 'SIGKILL');
+    await until(() => count !== undefined);
+    expect(count).toBe(2);
+    expect([a.partFile, b.partFile].filter((f) => fs.existsSync(f))).toEqual([]);
+    // Nothing left to stop: resolves with 0.
+    expect(await cancelAll()).toBe(0);
   });
 });
 

@@ -26,8 +26,11 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
 
 export function OpenDialog({ onClose }: { onClose: () => void }) {
   const [items, setItems] = useState<{ name: string; modified: number }[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [folder, setFolder] = useState<string | null>(null);
   useEffect(() => {
-    listProjects().then(setItems, () => setItems([]));
+    listProjects().then(setItems, (e: Error) => setError(e.message));
+    api<{ workspace: string }>('/api/health').then((h) => setFolder(h.workspace), () => undefined);
   }, []);
   const open = async (name: string) => {
     if (isDirty(useEditor.getState()) && !confirm('You have unsaved changes. Discard them and open another project?')) return;
@@ -36,7 +39,12 @@ export function OpenDialog({ onClose }: { onClose: () => void }) {
   };
   return (
     <Modal title="Open project" onClose={onClose}>
-      {!items && <p>Loading…</p>}
+      {!items && !error && <p>Loading…</p>}
+      {error && (
+        <p className="warn" data-testid="open-error">
+          {error}
+        </p>
+      )}
       {items && items.length === 0 && <p className="muted">No saved projects yet.</p>}
       <ul className="list open-list">
         {items?.map((p) => (
@@ -46,6 +54,11 @@ export function OpenDialog({ onClose }: { onClose: () => void }) {
           </li>
         ))}
       </ul>
+      {folder && (
+        <p className="muted small" data-testid="open-folder">
+          Projects are saved in {folder}
+        </p>
+      )}
       <div className="btn-row">
         <button onClick={onClose}>Cancel</button>
       </div>
@@ -207,7 +220,8 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
       try {
         setJob(await api<Job>(`/api/jobs/${job.id}`));
       } catch (e) {
-        setError((e as Error).message);
+        // The server stopped (or restarted and forgot the job): the export is over, so stop asking.
+        setJob({ ...job, status: 'error', error: (e as Error).message });
       }
     }, 300);
     return () => clearInterval(t);
@@ -222,7 +236,14 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
       setError((e as Error).message);
     }
   };
-  const cancel = async () => job && setJob(await api<Job>(`/api/jobs/${job.id}/cancel`, { method: 'POST' }));
+  const cancel = async () => {
+    if (!job) return;
+    try {
+      setJob(await api<Job>(`/api/jobs/${job.id}/cancel`, { method: 'POST' }));
+    } catch (e) {
+      setJob({ ...job, status: 'error', error: (e as Error).message });
+    }
+  };
   const running = !!job && !['done', 'error', 'cancelled'].includes(job.status);
   const pct = job ? Math.round((100 * job.frame) / Math.max(1, job.total)) : 0;
   const sep = health?.workspace.includes('\\') ? '\\' : '/';
@@ -309,7 +330,11 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
           <p data-testid="export-status">
             {job.status} — frame {job.frame}/{job.total} ({pct}%)
           </p>
-          {job.error && <pre className="warn">{job.error}</pre>}
+          {job.error && (
+            <pre className="warn" data-testid="export-error">
+              {job.error}
+            </pre>
+          )}
           {!!job.warnings?.length && (
             <ul className="warn export-warnings" data-testid="export-warnings">
               {job.warnings.map((w) => (

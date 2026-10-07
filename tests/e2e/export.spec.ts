@@ -86,7 +86,8 @@ test('export can be cancelled', async ({ request }) => {
   await expect.poll(async () => (job = await (await request.get(`/api/jobs/${job.id}`)).json()).frame, { timeout: 60_000 }).toBeGreaterThan(2);
   job = await (await request.post(`/api/jobs/${job.id}/cancel`)).json();
   expect(job.status).toBe('cancelled');
-  await expect.poll(() => fs.existsSync(job.outFile), { timeout: 10_000 }).toBe(false);
+  // Neither the unfinished file (<name>.mp4.part) nor anything under the real name stays.
+  await expect.poll(() => [job.outFile, `${job.outFile}.part`].filter((f) => fs.existsSync(f)), { timeout: 10_000 }).toEqual([]);
   const later = await (await request.get(`/api/jobs/${job.id}`)).json();
   expect(later.status).toBe('cancelled');
   expect(later.frame).toBeLessThan(later.total);

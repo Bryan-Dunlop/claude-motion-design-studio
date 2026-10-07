@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Local motion-design editor: edit scenes, layers and keyframes in the browser, export MP4 via headless Chromium + ffmpeg.",
   "scripts": {
-    "dev": "tsx server/dev.ts",
+    "start": "node --import tsx server/dev.ts --built --open",
+    "dev": "node --import tsx server/dev.ts",
     "render": "node --import tsx server/render-cli.ts",
     "postinstall": "node scripts/postinstall.mjs",
     "typecheck": "tsc --noEmit",
@@ -14,7 +15,7 @@
     "test:e2e": "playwright test"
   },
   "engines": {
-    "node": ">=20.6"
+    "node": ">=22.12.0"
   },
   "devDependencies": {
     "@playwright/test": "1.56.1",

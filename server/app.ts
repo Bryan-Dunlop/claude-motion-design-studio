@@ -1,6 +1,6 @@
 // Local HTTP server: filesystem access (projects, assets, zip) and export jobs.
-// The Vite dev middleware is mounted on the same port so the editor and render page share one origin.
-import fs from 'node:fs';
+// The editor (the Vite dev middleware, or the built editor for `npm start`) is served on the same port so the editor and
+// render page share one origin.
 import http from 'node:http';
 import net, { type AddressInfo } from 'node:net';
 import path from 'node:path';
@@ -13,7 +13,7 @@ import { acceptFrame, cancel, fail, ffmpegAvailable, finishFrames, freeOutFile, 
 import { isIgnoredFolder, isInside } from './paths';
 import { HttpError, parseProject, sanitizeName, Workspace } from './projects';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 export interface StartedServer {
   url: string;
@@ -43,7 +43,11 @@ export function isLocalRequest(host: string | undefined, origin: string | undefi
   }
 }
 
-export async function startServer(opts: { port: number; workspace: string; host?: string; hmr?: boolean }): Promise<StartedServer> {
+/**
+ * `built`: serve the editor built into dist/ (`npm start`, see startup.ensureBuilt) instead of the Vite dev server with
+ * live reload (`npm run dev`, the tests). `hmr: false` turns live reload off in the dev server.
+ */
+export async function startServer(opts: { port: number; workspace: string; host?: string; hmr?: boolean; built?: boolean }): Promise<StartedServer> {
   const ws = new Workspace(opts.workspace);
   const app = express();
   // Never the content types another site's page may send without asking first (a CORS "simple" request).
@@ -141,7 +145,8 @@ export async function startServer(opts: { port: number; workspace: string; host?
     const outFile = freeOutFile(ws.exports, (n) => exportFileName(name, outW, outH, now, n));
     const projectDir = ws.projectName(projectName) ? ws.projectDir(projectName) : null;
     try {
-      const job = await startExport({ project, projectDir, outFile, baseUrl, options, resolveAsset: (a) => ws.resolveAsset(projectDir, a) });
+      // handleSignals false: stopping the server cancels its exports first (server/dev.ts).
+      const job = await startExport({ project, projectDir, outFile, baseUrl, options, resolveAsset: (a) => ws.resolveAsset(projectDir, a), handleSignals: false });
       // Failures also go to the server log (the dialog shows them too); cancelling is not a failure.
       job.finished.catch((err: Error) => job.status === 'error' && console.error(`[export] ${path.basename(outFile)} failed: ${err.message}`));
       res.json(publicJob(job));
@@ -219,7 +224,9 @@ export async function startServer(opts: { port: number; workspace: string; host?
   const httpServer = http.createServer(app);
   let closeVite: () => Promise<void> = async () => undefined;
   const dist = path.join(ROOT, 'dist');
-  if (process.env.NODE_ENV === 'production' && fs.existsSync(path.join(dist, 'index.html'))) {
+  if (opts.built) {
+    // Nothing in these pages talks to a live-reload socket, so a server restart never reloads the editor (Vite's client
+    // does that) and loses unsaved work.
     app.use(express.static(dist));
   } else {
     const vite = await createViteServer({
@@ -229,8 +236,9 @@ export async function startServer(opts: { port: number; workspace: string; host?
         middlewareMode: true,
         hmr: opts.hmr === false ? false : { server: httpServer },
         ws: opts.hmr === false ? false : undefined,
-        // A function, not a glob: absolute paths can contain glob characters (e.g. "C:\\Users\\Me (Work)").
-        watch: { ignored: [(p: string) => isInside(p, ws.root) || isIgnoredFolder(p)] },
+        // Without live reload nothing needs to watch the source files. A function, not a glob: absolute paths can
+        // contain glob characters (e.g. "C:\\Users\\Me (Work)").
+        watch: opts.hmr === false ? null : { ignored: [(p: string) => isInside(p, ws.root) || isIgnoredFolder(p)] },
       },
       appType: 'mpa',
       logLevel: 'warn',
@@ -240,8 +248,16 @@ export async function startServer(opts: { port: number; workspace: string; host?
   }
 
   const host = opts.host ?? '127.0.0.1';
-  const server = await new Promise<http.Server>((resolve) => {
-    httpServer.listen(opts.port, host, () => resolve(httpServer));
+  // A port that is taken (EADDRINUSE) or reserved (EACCES) rejects, after Vite has let go, so the caller can explain it.
+  const server = await new Promise<http.Server>((resolve, reject) => {
+    httpServer.once('error', reject);
+    httpServer.listen(opts.port, host, () => {
+      httpServer.off('error', reject);
+      resolve(httpServer);
+    });
+  }).catch(async (e: unknown) => {
+    await closeVite();
+    throw e;
   });
   const port = (server.address() as AddressInfo).port;
   baseUrl = `http://${host}:${port}`;

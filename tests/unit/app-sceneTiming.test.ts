@@ -1,9 +1,10 @@
 // Scene timing edits (src/app/sceneTiming.ts): layers follow a scene's end when it gets shorter or longer.
 import { produce } from 'immer';
 import { describe, expect, it } from 'vitest';
-import { duplicatePlacement, followSceneEnd, MAX_VIDEO_SEC, moveSceneInList, resizeScene, type SceneMove } from '../../src/app/sceneTiming';
+import { duplicatePlacement, followSceneEnd, MAX_VIDEO_SEC, moveSceneInList, resizeScene, setLayerDuration, type SceneMove } from '../../src/app/sceneTiming';
 import { makeLayer, makeScene } from '../../src/shared/factories';
-import type { Keyframe, Scene, Settings } from '../../src/shared/schema';
+import { applyPreset, DEFAULT_PRESET, keepOutAtEnd } from '../../src/shared/presets';
+import type { Keyframe, Layer, Scene, Settings } from '../../src/shared/schema';
 
 const FPS = 30;
 const key = (id: string, time: number, value: number): Keyframe => ({ id, time, value, easing: { type: 'linear' } });
@@ -65,6 +66,46 @@ describe('resizeScene', () => {
     expect(lengths(s)).toEqual(lengths(origin));
     s = produce(s, (draft) => void resizeScene(draft, 9, FPS, origin));
     expect(lengths(s)).toEqual({ full: 9, past: 9, early: 4, late: 5 });
+  });
+});
+
+describe('"Out" presets stay at the layer\'s end (keepOutAtEnd)', () => {
+  /** A rectangle 0–5 s with a fade in (0–0.6), a fade out (4.4–5) and a key of its own at 2 s. */
+  function faded(): Layer {
+    let l = rect('r', 0, 5);
+    l = { ...l, keyframes: applyPreset(l, { ...DEFAULT_PRESET, phase: 'in' }) };
+    l = { ...l, keyframes: applyPreset(l, { ...DEFAULT_PRESET, phase: 'out' }) };
+    l.keyframes.opacity = [...l.keyframes.opacity, key('mine', 2, 0.5)].sort((a, b) => a.time - b.time);
+    return l;
+  }
+  const times = (k: Record<string, Keyframe[]>) => k.opacity.map((x) => [x.time, x.source ?? 'mine']);
+
+  it('move with the end when the layer gets longer or shorter; In presets and your own keyframes stay', () => {
+    expect(times(faded().keyframes)).toEqual([[0, 'preset:in'], [0.6, 'preset:in'], [2, 'mine'], [4.4, 'preset:out'], [5, 'preset:out']]);
+    expect(times(keepOutAtEnd(faded().keyframes, 5, 8))).toEqual([[0, 'preset:in'], [0.6, 'preset:in'], [2, 'mine'], [7.4, 'preset:out'], [8, 'preset:out']]);
+    expect(times(keepOutAtEnd(faded().keyframes, 5, 3))).toEqual([[0, 'preset:in'], [0.6, 'preset:in'], [2, 'mine'], [2.4, 'preset:out'], [3, 'preset:out']]);
+  });
+
+  it('never before the layer\'s start, kept in time order; nothing to move gives back the same object', () => {
+    expect(times(keepOutAtEnd(faded().keyframes, 5, 0.3))).toEqual([[0, 'preset:in'], [0, 'preset:out'], [0.3, 'preset:out'], [0.6, 'preset:in'], [2, 'mine']]);
+    const l = faded();
+    expect(keepOutAtEnd(l.keyframes, 5, 5)).toBe(l.keyframes);
+    const plain = { x: [key('a', 1, 0), key('b', 5, 100)] };
+    expect(keepOutAtEnd(plain, 5, 8)).toBe(plain);
+  });
+
+  it('the Duration field (setLayerDuration) and a scene getting longer or shorter take them along', () => {
+    const one = produce(faded(), (d) => setLayerDuration(d, 10));
+    expect([one.duration, times(one.keyframes).slice(-2)]).toEqual([10, [[9.4, 'preset:out'], [10, 'preset:out']]]);
+    const sc = makeScene({ id: 's', name: 'S', start: 0, duration: 5, layers: [faded()] });
+    const longer = produce(sc, (d) => void resizeScene(d, 12, FPS));
+    expect(times(longer.layers[0].keyframes).slice(-2)).toEqual([[11.4, 'preset:out'], [12, 'preset:out']]);
+    const shorter = produce(sc, (d) => void resizeScene(d, 3, FPS));
+    expect(times(shorter.layers[0].keyframes).slice(-2)).toEqual([[2.4, 'preset:out'], [3, 'preset:out']]);
+    // During a drag, worked out from where the drag started: out and back again is exact.
+    const there = produce(sc, (d) => void resizeScene(d, 0.2, FPS, sc));
+    const back = produce(there, (d) => void resizeScene(d, 5, FPS, sc));
+    expect(back.layers[0].keyframes).toEqual(sc.layers[0].keyframes);
   });
 });
 

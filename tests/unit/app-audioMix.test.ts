@@ -190,15 +190,15 @@ describe('buildAudioArgs', () => {
     expect(build(p).filter).toEqual([]);
   });
 
-  it('the exporter puts the audio inputs after stdin and the AAC options before -movflags', () => {
+  it('the exporter puts the audio inputs after stdin and the AAC options before the output (-f mp4 -movflags …)', () => {
     const p = project([{ start: 0.5 }]);
     const args = ffmpegArgs(p, '/out.mp4', build(p));
     const at = (x: string) => args.indexOf(x);
     // -progress pipe:1: ffmpeg reports its progress on stdout, which the exporter's watchdog reads.
     expect(args.slice(0, at('-filter_complex'))).toEqual(['-y', '-loglevel', 'error', '-progress', 'pipe:1', '-f', 'rawvideo', '-pix_fmt', 'rgba', '-s', '640x360', '-r', '30', '-i', '-', '-i', files.a]);
     expect(args.slice(at('-filter_complex') + 2, at('-vf'))).toEqual(['-map', '0:v', '-map', '[aout]']);
-    expect(args.slice(at('-c:a'), at('-movflags'))).toEqual(['-c:a', 'aac', '-b:a', '192k', '-ar', '48000']);
-    expect(args.slice(-3)).toEqual(['-movflags', '+faststart', '/out.mp4']);
+    expect(args.slice(at('-c:a'), args.lastIndexOf('-f'))).toEqual(['-c:a', 'aac', '-b:a', '192k', '-ar', '48000']);
+    expect(args.slice(-5)).toEqual(['-f', 'mp4', '-movflags', '+faststart', '/out.mp4']);
     // No audio → the v1 command, unchanged.
     expect(ffmpegArgs(project([]), '/out.mp4')).not.toContain('-filter_complex');
     expect(ffmpegArgs(project([]), '/out.mp4', build(project([])))).toEqual(ffmpegArgs(project([]), '/out.mp4'));

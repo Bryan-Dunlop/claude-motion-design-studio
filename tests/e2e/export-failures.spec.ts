@@ -83,7 +83,8 @@ async function expectCliFailed(run: Awaited<ReturnType<typeof cliRendering>>, me
   expect(r.status, r.stdout + r.stderr).toBe(1);
   expect(r.stderr).toMatch(message);
   expect(Date.now() - t0).toBeLessThan(withinMs);
-  expect(fs.existsSync(run.out), 'no unfinished MP4 left behind').toBe(false);
+  expect(fs.existsSync(run.out), 'nothing under the real name').toBe(false);
+  expect(fs.existsSync(`${run.out}.part`), 'no unfinished MP4 left behind').toBe(false);
   await expect.poll(() => running(run.ffmpeg.pid), { timeout: 10_000 }).toBe(false);
   for (const p of run.procs.filter(isBrowser)) await expect.poll(() => running(p.pid), { timeout: 10_000 }).toBe(false);
 }
@@ -159,7 +160,7 @@ test.describe('a failed or cancelled export leaves no unfinished MP4', () => {
     // Pressed the moment ffmpeg creates the file: the CLI used to exit (or Playwright's own Ctrl+C handler exited it
     // with 130) before ffmpeg was gone, and the empty MP4 stayed, in about half of the runs.
     for (let i = 0; i < 3; i++) {
-      const run = await cliRendering(`ctrl-c-${i}`, { detached: true, size: [1280, 720], ready: (out) => fs.existsSync(out) });
+      const run = await cliRendering(`ctrl-c-${i}`, { detached: true, size: [1280, 720], ready: (out) => fs.existsSync(`${out}.part`) });
       const t0 = Date.now();
       // Ctrl+C in a terminal: SIGINT to the CLI's whole process group (node and ffmpeg; Chromium has its own group).
       process.kill(-run.cli.child.pid!, 'SIGINT');
@@ -173,7 +174,9 @@ test.describe('a failed or cancelled export leaves no unfinished MP4', () => {
     expect(start.ok(), await start.text()).toBe(true);
     let job = (await start.json()) as Job;
     await expect.poll(async () => (job = await (await request.get(`/api/jobs/${job.id}`)).json()).frame, { timeout: 60_000 }).toBeGreaterThan(30);
-    expect(fs.existsSync(job.outFile)).toBe(true);
+    // ffmpeg writes <name>.mp4.part; the real name only ever holds a complete video.
+    expect(fs.existsSync(`${job.outFile}.part`)).toBe(true);
+    expect(fs.existsSync(job.outFile)).toBe(false);
     const ffmpeg = execFileSync('ps', ['-eww', '-o', 'pid=,args='])
       .toString()
       .split('\n')
@@ -182,7 +185,8 @@ test.describe('a failed or cancelled export leaves no unfinished MP4', () => {
     process.kill(Number(/^\s*(\d+)/.exec(ffmpeg!)![1]), 'SIGKILL');
     await expect.poll(async () => (job = await (await request.get(`/api/jobs/${job.id}`)).json()).status, { timeout: 10_000 }).toBe('error');
     expect(job.error).toMatch(/^ffmpeg exited with code null/);
-    await expect.poll(() => fs.existsSync(job.outFile), { timeout: 5_000 }).toBe(false);
+    await expect.poll(() => fs.existsSync(`${job.outFile}.part`), { timeout: 5_000 }).toBe(false);
+    expect(fs.existsSync(job.outFile)).toBe(false);
   });
 });
 

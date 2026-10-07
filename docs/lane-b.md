@@ -1,5 +1,8 @@
 # Lane B — app, audio, UX, export
 
+> **Build log.** Written while v2 was being built, so test counts, timings and a few statements describe that moment.
+> Later changes are marked *Later:*. `README.md` and the tests are the current reference.
+
 Per feature: what the user sees, the tests that cover it, measured numbers. (The lead turns this into the README.)
 
 ## B1. Audio
@@ -53,7 +56,9 @@ Per feature: what the user sees, the tests that cover it, measured numbers. (The
   only; relinking keeps every clip's settings. Relink now refuses a file of the wrong kind (e.g. an image for a sound),
   and relinking an audio file no longer fails with "could not decode image".
 - **Robust export**: if ffmpeg doesn't exit within 30 s after the last frame (it can hang and then ignores SIGTERM), it
-  is killed (SIGKILL) and the export fails with a clear message instead of hanging forever.
+  is killed (SIGKILL) and the export fails with a clear message instead of hanging forever. *Later:* the limit is now
+  60 s **without progress** (ffmpeg's `-progress` reports or a growing file, plus time for `+faststart`), so slow presets
+  and 4K exports finish; the message is "ffmpeg made no progress for 60 s while finishing the video".
 
 ### How it works (for maintainers)
 
@@ -70,7 +75,8 @@ Per feature: what the user sees, the tests that cover it, measured numbers. (The
   `-movflags +faststart`. A fade is only emitted when > 0 (`d=0` means 44100 samples in ffmpeg). Missing files → one
   warning per file on the job (`job.warnings`, returned by `/api/jobs/:id`). The exporter gets an asset resolver from the
   server / CLI (project folder, then the scratch store). Watchdog in `finishFrames`: 30 s, then `fail()` (SIGKILL);
-  `MOTION_FFMPEG_EXIT_TIMEOUT_MS` overrides the 30 s for tests.
+  `MOTION_FFMPEG_EXIT_TIMEOUT_MS` overrides the 30 s for tests. *Later:* `watchFlush` — 60 s without progress (see
+  above); the same variable overrides it.
 - `server/audioDecode.ts` + `GET /api/audio-info?project&path&hash` — ffmpeg decode to 8 kHz mono f32 (streamed, no
   full buffer kept): length = sample count / 8000 (not ffprobe's container duration, which is wrong for ADTS/MP3), peaks
   = max |sample| per 10 ms.
@@ -137,6 +143,7 @@ Playwright:
     clip still mixed; only missing/silent clips → no audio stream.
   - "watchdog…" (POSIX only) — a fake ffmpeg that swallows the frames and then hangs ignoring SIGTERM: with the timeout
     at 1.5 s the CLI fails with "ffmpeg did not finish within 1.5 s after the last frame…" and the process is gone.
+    *Later:* the message is "ffmpeg made no progress for 1.5 s while finishing the video, so it was stopped."
 
 ### Measured
 
@@ -157,6 +164,8 @@ Playwright:
 
 - Clips using the same file each get their own ffmpeg input (the optional `asplit` sharing was not implemented). Fine for
   normal projects; a cursor with ~100+ click sounds makes a long command line (Windows limit 32 767 characters).
+  *Later:* implemented — short clips of the same file share one input through `asplit` (up to 10 s of sound per input,
+  `SHARED_INPUT_SECONDS`), and a long filter graph goes to ffmpeg in a file; 1200 click sounds export.
 - Sources with more than two channels are down-mixed slightly differently by Web Audio (preview) and ffmpeg (export).
 - Preview sound starts when the browser allows it (after a click or key press on the page — always the case when you
   press Play).
@@ -431,7 +440,8 @@ Playwright:
 - Typecheck → unit → e2e (`MOTION_LOG_FILE` set); on failure `test-results/` and the server log are uploaded as
   `test-results-<os>` (kept 14 days).
 - Checked here: the YAML parses, and the pinned asset exists in BtbN's current `latest` release with a checksum line
-  in the format the step parses. The workflow itself has not run on GitHub yet (no push from this lane).
+  in the format the step parses. The workflow itself has not run on GitHub yet (no push from this lane). *Later:* it runs on every push to
+  the pull request and passes on both systems.
 
 ### Tests
 
@@ -511,6 +521,7 @@ CLI renders on this 4-core machine of the 3 s 1080p export-test project (90 fram
 
 - The Windows CI leg has not run yet (no Windows machine here; the workflow was checked statically). Windows-only
   behaviour (Notepad BOM, PowerShell zips, device names, watch-filter paths) is covered by unit tests that run on any OS.
+  *Later:* the Windows leg runs and passes; a few failure-simulation tests use POSIX tools and are skipped there.
 - `--preset` is an extra CLI flag (the spec lists `--scale`, `--crf`, `--no-audio`) so a terminal render can reproduce
   `Draft` exactly; the dialog only offers 100/50/25%, the CLI accepts any fraction 0 < s ≤ 1.
 - The PNG is the frame under the playhead at its exact frame time (`frame/fps`, like the MP4), not an in-between time

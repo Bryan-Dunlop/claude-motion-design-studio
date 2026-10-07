@@ -176,13 +176,22 @@ export const CARET = { gap: 0.04, width: 0.07, height: 1 } as const;
 /** Blinks with a 1 s period, from layer-local time (on for the first half of each second). */
 export const caretBlinkOn = (local: number) => local - Math.floor(local) < 0.5;
 
+/**
+ * Like a real text cursor: solid while letters are typed (or deleted), from `from` to `to` (the first and the last
+ * keystroke); blinking otherwise, counted from the layer's start before typing and from the last keystroke after it.
+ */
+export function caretShows(local: number, from: number, to: number): boolean {
+  if (local >= from && local <= to) return true;
+  return caretBlinkOn(local > to ? local - to : local);
+}
+
 // ---------------------------------------------------------------- timing state (no measuring)
 
 export interface TextAnimTiming {
   /** Some unit of the in / out phase is not at rest (u < 1, or a typewriter unit not shown yet; v > 0). */
   inActive: boolean;
   outActive: boolean;
-  /** The typewriter caret is showing (inside its window and blinked on). */
+  /** The typewriter caret is showing (inside its window; solid while typing, blinked on otherwise — caretShows). */
   caret: boolean;
 }
 
@@ -191,7 +200,7 @@ export function textAnimTiming(layer: TextLayer, local: number): TextAnimTiming 
   const { textIn: a, textOut: b } = layer;
   let inActive = false;
   let outActive = false;
-  let caretWindow = false;
+  let caret = false;
   if (a) {
     const n = splitUnits(layer.content, a.unit).length;
     if (n > 0) {
@@ -199,15 +208,22 @@ export function textAnimTiming(layer: TextLayer, local: number): TextAnimTiming 
       const u = unitProgress(a, 'in', n - 1, n, local, layer.duration);
       inActive = a.effect === 'typewriter' ? !(u > 0) : u < 1;
     }
-    if (a.effect === 'typewriter' && a.caret) caretWindow = local < a.delay + Math.max(0, n - 1) * a.stagger + CARET_HOLD;
+    if (a.effect === 'typewriter' && a.caret) {
+      // The last letter appears at `typed`.
+      const typed = a.delay + Math.max(0, n - 1) * a.stagger;
+      if (local < typed + CARET_HOLD) caret = caretShows(local, a.delay, typed);
+    }
   }
   if (b) {
     const n = splitUnits(layer.content, b.unit).length;
     // Rank 0 leaves first.
     if (n > 0) outActive = unitProgress(b, 'out', 0, n, local, layer.duration) > 0;
-    if (b.effect === 'typewriter' && b.caret && local >= outStart(b, n, layer.duration) - CARET_HOLD) caretWindow = true;
+    if (b.effect === 'typewriter' && b.caret) {
+      const from = outStart(b, n, layer.duration);
+      if (local >= from - CARET_HOLD) caret = caretShows(local, from, from + Math.max(0, n - 1) * b.stagger);
+    }
   }
-  return { inActive, outActive, caret: caretWindow && caretBlinkOn(local) };
+  return { inActive, outActive, caret };
 }
 
 function activePhases(layer: TextLayer, t: TextAnimTiming): { a: TextAnim; phase: Phase }[] {

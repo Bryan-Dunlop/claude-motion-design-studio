@@ -1,0 +1,23 @@
+# Keep text files LF everywhere (fixtures are hashed/compared byte-for-byte) and never touch binaries.
+* text=auto eol=lf
+# Windows batch files need CRLF (cmd.exe misreads labels and blocks in LF files).
+*.cmd text eol=crlf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.wav binary
+*.mp3 binary
+*.m4a binary
+*.ogg binary
+*.flac binary
+*.mp4 binary
+*.zip binary
+*.aac binary
+*.opus binary
+*.gif binary
+*.ico binary

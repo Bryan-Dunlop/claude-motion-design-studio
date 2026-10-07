@@ -1,0 +1,207 @@
+{
+  "schemaVersion": 1,
+  "settings": {
+    "durationSec": 3,
+    "aspect": "16:9",
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "background": "#1b2340"
+  },
+  "scenes": [
+    {
+      "id": "s1",
+      "name": "Scene 1",
+      "start": 0,
+      "duration": 3,
+      "layers": [
+        {
+          "id": "r",
+          "name": "Rect",
+          "visible": true,
+          "locked": false,
+          "start": 0,
+          "duration": 3,
+          "anchorX": 0.5,
+          "anchorY": 0.5,
+          "x": 400,
+          "y": 540,
+          "scale": 1,
+          "rotation": 0,
+          "opacity": 1,
+          "keyframes": {
+            "x": [
+              {
+                "id": "k1",
+                "time": 0,
+                "value": 300,
+                "easing": {
+                  "type": "easeInOut"
+                }
+              },
+              {
+                "id": "k2",
+                "time": 3,
+                "value": 1600,
+                "easing": {
+                  "type": "linear"
+                }
+              }
+            ],
+            "rotation": [
+              {
+                "id": "k3",
+                "time": 0,
+                "value": 0,
+                "easing": {
+                  "type": "spring",
+                  "stiffness": 120,
+                  "damping": 10,
+                  "mass": 1
+                }
+              },
+              {
+                "id": "k4",
+                "time": 2,
+                "value": 90,
+                "easing": {
+                  "type": "linear"
+                }
+              }
+            ]
+          },
+          "type": "shape",
+          "shape": "rect",
+          "width": 400,
+          "height": 260,
+          "cornerRadius": 30,
+          "fill": "#ff7a3d",
+          "stroke": "#ffffff",
+          "strokeWidth": 6
+        },
+        {
+          "id": "i",
+          "name": "Image",
+          "visible": true,
+          "locked": false,
+          "start": 0,
+          "duration": 3,
+          "anchorX": 0.5,
+          "anchorY": 0.5,
+          "x": 1400,
+          "y": 300,
+          "scale": 1,
+          "rotation": 0,
+          "opacity": 1,
+          "keyframes": {},
+          "type": "image",
+          "assetId": "img1",
+          "width": 320,
+          "height": 240
+        },
+        {
+          "id": "t",
+          "name": "Title",
+          "visible": true,
+          "locked": false,
+          "start": 0,
+          "duration": 3,
+          "anchorX": 0.5,
+          "anchorY": 0.5,
+          "x": 960,
+          "y": 860,
+          "scale": 1,
+          "rotation": 0,
+          "opacity": 1,
+          "keyframes": {
+            "opacity": [
+              {
+                "id": "k5",
+                "time": 0,
+                "value": 0,
+                "easing": {
+                  "type": "easeOut"
+                }
+              },
+              {
+                "id": "k6",
+                "time": 1,
+                "value": 1,
+                "easing": {
+                  "type": "linear"
+                }
+              }
+            ]
+          },
+          "type": "text",
+          "content": "Export test\nline two",
+          "fontFamily": "Inter",
+          "fontSize": 96,
+          "fontWeight": 800,
+          "lineHeight": 1.1,
+          "letterSpacing": -1,
+          "align": "center",
+          "color": "#ffffff"
+        },
+        {
+          "id": "c",
+          "name": "Cursor",
+          "visible": true,
+          "locked": false,
+          "start": 0,
+          "duration": 3,
+          "anchorX": 0,
+          "anchorY": 0,
+          "x": 0,
+          "y": 0,
+          "scale": 1,
+          "rotation": 0,
+          "opacity": 1,
+          "keyframes": {},
+          "type": "cursor",
+          "points": [
+            {
+              "id": "p1",
+              "x": 200,
+              "y": 200,
+              "time": 0
+            },
+            {
+              "id": "p2",
+              "x": 1000,
+              "y": 500,
+              "time": 1.5
+            },
+            {
+              "id": "p3",
+              "x": 1500,
+              "y": 300,
+              "time": 2.8
+            }
+          ],
+          "clicks": [
+            {
+              "id": "c1",
+              "time": 1.5
+            }
+          ],
+          "smoothing": 0.6,
+          "size": 40,
+          "color": "#ffffff",
+          "rippleColor": "#ffffff66"
+        }
+      ]
+    }
+  ],
+  "assets": [
+    {
+      "id": "img1",
+      "originalName": "fixture.png",
+      "relativePath": "assets/3a4d41c6-fixture.png",
+      "type": "image",
+      "hash": "3a4d41c65681168fd1aca09c67a547b112c5a37c501aa165fd3af4324b2bb219",
+      "width": 320,
+      "height": 240
+    }
+  ]
+}

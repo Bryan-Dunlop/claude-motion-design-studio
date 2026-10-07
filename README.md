@@ -125,7 +125,7 @@ about 64 s. Blur and transitions cost extra while they are on screen (see `docs/
 ## Works (tested)
 
 Everything below is covered by automated tests that pass. Run `npm test`:
-**354 unit tests** (vitest) and **105 end-to-end tests** (Playwright, real Chromium + ffmpeg), all passing on Linux; CI
+**377 unit tests** (vitest) and **134 end-to-end tests** (Playwright, real Chromium + ffmpeg), all passing on Linux; CI
 runs them on Ubuntu and Windows.
 
 The exact test names and measured numbers for every v2 feature are in [`docs/lane-a.md`](docs/lane-a.md) (rendering:
@@ -159,6 +159,11 @@ timeline, playback, SVG/font import, cursor paths; v1 projects open in v2.
   to draw.
 - **Editing fields** — a typed value lands on the item it was typed for (as its own undo step) whatever you click
   next; Escape cancels it; Ctrl+S saves it; undo/redo/Delete work right after picking from a dropdown or a colour.
+- **Scenes & project** — a scene that gets shorter ("+ Scene", Duration, timeline trim) ends its layers with it, so
+  exit animations still play; a duplicated scene goes after the last one; ↑/↓ in the Scenes list change when scenes
+  play; Resolution presets scale the whole composition; the toolbar stays on one row at 1280×720.
+- **Projects on disk** — folders renamed or copied by hand open as themselves; a full disk never leaves a cut-off file
+  behind; re-importing your own .zip works whatever the name; the local API refuses other sites.
 - **Export & formats** — 100/50/25 % sizes incl. odd sizes, quality levels, include-audio, unique file names, CLI flags,
   PNG still identical to the video frame, *Make a copy in another format*, Windows-safe names, Notepad/PowerShell files.
 - **When an export goes wrong** — a crashed or frozen render page, ffmpeg dying or stuck, Ctrl+C in the CLI: the export
@@ -185,6 +190,8 @@ timeline, playback, SVG/font import, cursor paths; v1 projects open in v2.
 - **Right-to-left text** (Hebrew, Arabic) animates by word or letter in place. A line that mixes right-to-left and
   left-to-right words — or digits, when animating by letter — animates as one whole line.
 - **Format copy** scales and centres; it doesn't re-arrange layouts for the new shape.
+- **Shortening a scene** ends its layers with it and text animations follow, but keyframes stay where they are: an Out
+  preset applied before the cut has to be applied again.
 - **Undo history** lives in memory only and resets when you open a project.
 - **Test hook:** the editor exposes its store on `window.__motion` (used by the Playwright tests).
 

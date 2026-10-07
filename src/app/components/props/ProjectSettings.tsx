@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { updateSettings } from '../../actions';
+import { resizeComposition, updateSettings } from '../../actions';
 import { useEditor } from '../../store';
 import { FormatCopyDialog } from '../Dialogs';
 import { ColorField, NumberField, Row, Section, Select } from '../Fields';
@@ -26,15 +26,19 @@ export function ProjectSettings() {
           onChange={(aspect) => updateSettings({ aspect })}
         />
       </Row>
-      <Row label="Width" tip="Output width in pixels (even numbers encode best).">
+      <Row label="Width" tip="Output width in pixels (even numbers encode best). Layers are not scaled: they keep their size and position. To scale everything with the frame, use Resolution.">
         <NumberField value={st.width} min={16} max={7680} decimals={0} onCommit={(v) => updateSettings({ width: Math.round(v) })} testId="setting-width" />
       </Row>
-      <Row label="Height" tip="Output height in pixels.">
+      <Row label="Height" tip="Output height in pixels. Layers are not scaled: they keep their size and position. To scale everything with the frame, use Resolution.">
         <NumberField value={st.height} min={16} max={7680} decimals={0} onCommit={(v) => updateSettings({ height: Math.round(v) })} testId="setting-height" />
       </Row>
-      <Row label="Resolution" tip="Quick presets for the long edge. Keeps the aspect ratio.">
+      <Row
+        label="Resolution"
+        tip="Frame size presets for the long edge, keeping the shape. Every layer is scaled with the frame, so the picture stays the same. For a smaller video file only, use Export MP4 → Size instead."
+      >
         <Select
           value={'' as string}
+          testId="setting-resolution"
           options={[
             { value: '', label: 'Preset…' },
             { value: '1280', label: '720p' },
@@ -47,7 +51,8 @@ export function ProjectSettings() {
             const long = Number(v);
             const r = st.width / st.height;
             const even = (n: number) => Math.max(16, Math.round(n / 2) * 2);
-            updateSettings(r >= 1 ? { width: long, height: even(long / r) } : { height: long, width: even(long * r) });
+            if (r >= 1) resizeComposition(long, even(long / r));
+            else resizeComposition(even(long * r), long);
           }}
         />
       </Row>

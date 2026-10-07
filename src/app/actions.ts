@@ -3,7 +3,7 @@ import type { Draft } from 'immer';
 import { assetUrl } from '../shared/assetUrl';
 import { makeId } from '../shared/presets';
 import { makeLayer, makeScene } from '../shared/factories';
-import { aspectOf, formatSize } from '../shared/fitToFrame';
+import { aspectOf, fitToFrame, formatSize } from '../shared/fitToFrame';
 import { safeFileName } from '../shared/names';
 import { emptyProject, ProjectSchema, type Asset, type AudioClip, type Layer, type Project, type Scene, type Settings, type ShapeKind } from '../shared/schema';
 import { clockLabel, duplicateClipsAt, newClip } from './audio/clips';
@@ -433,6 +433,23 @@ export function updateSettings(patch: Partial<Settings>) {
   });
   const { time, project } = S();
   if (time > project.settings.durationSec) S().setTime(project.settings.durationSec);
+}
+
+/**
+ * Project settings → Resolution: a new frame size of the same shape, with the whole composition scaled to it (the
+ * fitToFrame mapping "Make a copy in another format" uses), so the picture stays the same. One undo step.
+ */
+export function resizeComposition(width: number, height: number) {
+  const { project } = S();
+  const { width: W, height: H } = project.settings;
+  if (width === W && height === H) return;
+  const fitted = fitToFrame(project, width, height);
+  S().commit((d) => {
+    d.settings = fitted.settings;
+    d.scenes = fitted.scenes;
+  });
+  const k = Math.min(width / W, height / H);
+  S().toast(`Resized to ${width}×${height}: every layer was scaled with the frame (× ${+k.toFixed(3)}).`);
 }
 
 // ---------------------------------------------------------------- assets

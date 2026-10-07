@@ -2,7 +2,7 @@
 // animations still play before the cut), a duplicated scene goes after the last one, and the Scenes list ↑/↓ change
 // when scenes play.
 import { expect, test, type Page } from '@playwright/test';
-import { editor, round, setNumber, setTime, shortcut, startDragAt, toast } from './app-ui-helpers';
+import { editor, round, setNumber, setTime, shortcut, startDragAt, store, toast } from './app-ui-helpers';
 import { getState, layerOf, past } from './helpers';
 
 // A missing control fails fast instead of waiting for the whole test timeout.
@@ -204,5 +204,113 @@ test.describe('duplicate scene (R8)', () => {
     expect(await videoLength(page)).toBe(40);
     await toast(page, 'Scene 2 copy starts at 22.50 s.');
     expect((await editor(page)).time).toBe(22.5);
+  });
+});
+
+/** Mean red and blue of the preview canvas at time t, once the preview has drawn that time. */
+async function redBlue(page: Page, t: number) {
+  await setTime(page, t);
+  return page.evaluate(
+    () =>
+      new Promise<{ r: number; b: number }>((resolve) =>
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => {
+            const c = document.querySelector('[data-testid=preview-canvas]') as HTMLCanvasElement;
+            const d = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
+            let r = 0;
+            let b = 0;
+            for (let i = 0; i < d.length; i += 4) {
+              r += d[i];
+              b += d[i + 2];
+            }
+            resolve({ r: r / (d.length / 4), b: b / (d.length / 4) });
+          }),
+        ),
+      ),
+  );
+}
+
+test.describe('Scenes list ↑/↓ (R12)', () => {
+  test('↓/↑ swap the time slots of scenes that don’t overlap (lengths and gap kept), so the list is the order they play in', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('add-text').click(); // white text in Scene 1
+    await page.getByTestId('add-scene').click(); // Scene 1 0–7.5, Scene 2 7.5–15 (selected)
+    await page.getByTestId('add-rect').click(); // blue rectangle in Scene 2
+    let at3 = await redBlue(page, 3);
+    expect(Math.abs(at3.b - at3.r)).toBeLessThan(0.5); // the white text plays first
+
+    const h = await past(page);
+    await page.getByTestId('scene-down-0').click();
+    expect(await past(page)).toBe(h + 1);
+    expect(await scenes(page)).toEqual([
+      ['Scene 2', 0, 7.5],
+      ['Scene 1', 7.5, 7.5],
+    ]);
+    at3 = await redBlue(page, 3);
+    expect(at3.b - at3.r).toBeGreaterThan(5); // now the blue rectangle does
+    const x1 = (await page.getByTestId('scene-block-Scene 1').boundingBox())!.x;
+    const x2 = (await page.getByTestId('scene-block-Scene 2').boundingBox())!.x;
+    expect(x2).toBeLessThan(x1);
+
+    // Different lengths with a gap between them: each keeps its length and the gap stays between them.
+    await store(page, 's.commit((d) => { d.scenes[0].duration = 5; d.scenes[1].start = 7; d.scenes[1].duration = 8; })');
+    await page.getByTestId('scene-up-1').click();
+    expect(await scenes(page)).toEqual([
+      ['Scene 1', 0, 8],
+      ['Scene 2', 10, 5],
+    ]);
+    await shortcut(page, 'Control+z');
+    expect(await scenes(page)).toEqual([
+      ['Scene 2', 0, 5],
+      ['Scene 1', 7, 8],
+    ]);
+  });
+
+  test('scenes that overlap in time only swap drawing order, and the tooltip and a toast say so', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('add-text').click();
+    await page.getByTestId('add-scene').click();
+    await store(page, 's.commit((d) => { d.scenes[1].start = 5; })'); // Scene 2 5–12.5 overlaps Scene 1 0–7.5
+    await expect(page.getByTestId('scene-down-0')).toHaveAttribute('title', /^Move scene down: .*If the two overlap in time, only the drawing order changes/);
+    await expect(page.getByTestId('scene-up-1')).toHaveAttribute('title', /^Move scene up: .*If the two overlap in time, only the drawing order changes/);
+    const h = await past(page);
+    await page.getByTestId('scene-down-0').click();
+    expect(await past(page)).toBe(h + 1);
+    expect(await scenes(page)).toEqual([
+      ['Scene 2', 5, 7.5],
+      ['Scene 1', 0, 7.5],
+    ]);
+    await toast(page, 'Scene 1 and Scene 2 overlap in time, so only the drawing order changed: Scene 1 is now drawn on top where they overlap.');
+  });
+
+  test('two scenes with another one playing between them (list out of time order) are not swapped if that would make them overlap it', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('add-text').click();
+    await page.getByTestId('add-scene').click();
+    await page.getByTestId('add-scene').click();
+    // List: A 0–4, C 6–8, B 4–6 (C and A have B between them in time, and different lengths).
+    await store(page, `s.commit((d) => {
+      const [a, b, c] = d.scenes;
+      Object.assign(a, { name: 'A', start: 0, duration: 4 });
+      Object.assign(b, { name: 'B', start: 4, duration: 2 });
+      Object.assign(c, { name: 'C', start: 6, duration: 2 });
+      d.scenes = [a, c, b];
+    })`);
+    const h = await past(page);
+    await page.getByTestId('scene-down-0').click();
+    expect(await past(page)).toBe(h);
+    expect(await scenes(page)).toEqual([
+      ['A', 0, 4],
+      ['C', 6, 2],
+      ['B', 4, 2],
+    ]);
+    await toast(page, 'A and C can’t swap places: another scene plays between them. Drag the scene blocks in the timeline instead.');
+    // Moving C down past B (its neighbour in time) puts the list in time order.
+    await page.getByTestId('scene-down-1').click();
+    expect(await scenes(page)).toEqual([
+      ['A', 0, 4],
+      ['B', 4, 2],
+      ['C', 6, 2],
+    ]);
   });
 });

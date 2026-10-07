@@ -57,3 +57,40 @@ export function duplicatePlacement(project: Pick<Project, 'scenes' | 'settings'>
   if (end > MAX_VIDEO_SEC) return null;
   return { start, durationSec: Math.max(project.settings.durationSec, end) };
 }
+
+/** What a Scenes list ↑/↓ did: swapped time slots, only swapped drawing order, or nothing (refused / no neighbour). */
+export type SceneMove = 'swapped' | 'stacked' | 'blocked' | null;
+
+type Span = Pick<Scene, 'start' | 'duration'>;
+const overlaps = (a: Span, b: Span) => a.start < b.start + b.duration - 1e-9 && b.start < a.start + a.duration - 1e-9;
+
+/**
+ * Scenes list ↑/↓ (delta −1 / +1): move a scene one place in the list. When it and its neighbour don't overlap in time
+ * they also swap time slots — each keeps its length and the gap between them stays — so the list stays the order the
+ * scenes play in. Scenes that overlap only swap drawing order (lower in the list = drawn on top). Nothing changes
+ * ('blocked') when swapping would make one of them overlap another scene, which only happens when that scene plays
+ * between them (the list is out of time order) and they have different lengths.
+ */
+export function moveSceneInList(scenes: Draft<Scene>[], sceneId: string, delta: -1 | 1): SceneMove {
+  const i = scenes.findIndex((s) => s.id === sceneId);
+  const j = i + delta;
+  if (i < 0 || j < 0 || j >= scenes.length) return null;
+  const a = scenes[i];
+  const b = scenes[j];
+  const stacked = overlaps(a, b);
+  if (!stacked) {
+    const [first, second] = a.start <= b.start ? [a, b] : [b, a];
+    const gap = second.start - (first.start + first.duration);
+    // After the move, the one higher in the list takes the earlier slot.
+    const [early, late] = delta < 0 ? [a, b] : [b, a];
+    const earlyAt = { start: first.start, duration: early.duration };
+    const lateAt = { start: clean(first.start + early.duration + gap), duration: late.duration };
+    const others = scenes.filter((s) => s !== a && s !== b && !overlaps(s, first) && !overlaps(s, second));
+    if (others.some((s) => overlaps(s, earlyAt) || overlaps(s, lateAt))) return 'blocked';
+    early.start = earlyAt.start;
+    late.start = lateAt.start;
+  }
+  scenes[i] = b;
+  scenes[j] = a;
+  return stacked ? 'stacked' : 'swapped';
+}

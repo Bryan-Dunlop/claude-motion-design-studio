@@ -1,7 +1,7 @@
 // Scene timing edits (src/app/sceneTiming.ts): layers follow a scene's end when it gets shorter or longer.
 import { produce } from 'immer';
 import { describe, expect, it } from 'vitest';
-import { duplicatePlacement, followSceneEnd, MAX_VIDEO_SEC, resizeScene } from '../../src/app/sceneTiming';
+import { duplicatePlacement, followSceneEnd, MAX_VIDEO_SEC, moveSceneInList, resizeScene, type SceneMove } from '../../src/app/sceneTiming';
 import { makeLayer, makeScene } from '../../src/shared/factories';
 import type { Keyframe, Scene, Settings } from '../../src/shared/schema';
 
@@ -85,5 +85,45 @@ describe('duplicatePlacement', () => {
   it('refuses when the video would get longer than the file allows', () => {
     expect(duplicatePlacement(project(3000, at(0, 3000)), at(0, 600))).toEqual({ start: 3000, durationSec: MAX_VIDEO_SEC });
     expect(duplicatePlacement(project(3000, at(0, 3000)), at(0, 601))).toBeNull();
+  });
+});
+
+describe('moveSceneInList', () => {
+  const sc = (id: string, start: number, duration: number) => makeScene({ id, name: id, start, duration, layers: [] });
+  /** Run a list move; returns what happened and the list as [id, start, duration]. */
+  function move(scenes: Scene[], id: string, delta: -1 | 1) {
+    let result: SceneMove = null;
+    const next = produce(scenes, (d) => void (result = moveSceneInList(d, id, delta)));
+    return { result, list: next.map((s) => [s.id, s.start, s.duration]) };
+  }
+
+  it('scenes that follow each other swap time slots and places', () => {
+    expect(move([sc('a', 0, 7.5), sc('b', 7.5, 7.5)], 'a', 1)).toEqual({ result: 'swapped', list: [['b', 0, 7.5], ['a', 7.5, 7.5]] });
+    expect(move([sc('a', 0, 7.5), sc('b', 7.5, 7.5)], 'b', -1)).toEqual({ result: 'swapped', list: [['b', 0, 7.5], ['a', 7.5, 7.5]] });
+  });
+
+  it('each keeps its length and the gap stays between them', () => {
+    expect(move([sc('a', 1, 4), sc('b', 7, 8)], 'b', -1)).toEqual({ result: 'swapped', list: [['b', 1, 8], ['a', 11, 4]] });
+  });
+
+  it('a list out of time order is put in order without moving anything in time', () => {
+    expect(move([sc('b', 7.5, 7.5), sc('a', 0, 7.5)], 'b', 1)).toEqual({ result: 'swapped', list: [['a', 0, 7.5], ['b', 7.5, 7.5]] });
+  });
+
+  it('scenes that overlap only swap drawing order', () => {
+    expect(move([sc('a', 0, 7.5), sc('b', 5, 7.5)], 'a', 1)).toEqual({ result: 'stacked', list: [['b', 5, 7.5], ['a', 0, 7.5]] });
+    // A long overlay scene overlapping both doesn't stop two scenes from swapping.
+    expect(move([sc('logo', 0, 15), sc('a', 0, 5), sc('b', 5, 10)], 'a', 1).list).toEqual([['logo', 0, 15], ['b', 0, 10], ['a', 10, 5]]);
+  });
+
+  it('refuses when a scene playing between them would end up overlapped; fine when the lengths are equal', () => {
+    const between = [sc('a', 0, 4), sc('c', 6, 2), sc('b', 4, 2)];
+    expect(move(between, 'a', 1)).toEqual({ result: 'blocked', list: between.map((s) => [s.id, s.start, s.duration]) });
+    expect(move([sc('a', 0, 2), sc('c', 4, 2), sc('b', 2, 2)], 'a', 1)).toEqual({ result: 'swapped', list: [['c', 0, 2], ['a', 4, 2], ['b', 2, 2]] });
+  });
+
+  it('nothing to swap with at either end of the list', () => {
+    expect(move([sc('a', 0, 5), sc('b', 5, 5)], 'a', -1)).toEqual({ result: null, list: [['a', 0, 5], ['b', 5, 5]] });
+    expect(move([sc('a', 0, 5), sc('b', 5, 5)], 'b', 1).result).toBeNull();
   });
 });

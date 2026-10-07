@@ -9,7 +9,7 @@ import { emptyProject, ProjectSchema, type Asset, type AudioClip, type Layer, ty
 import { clockLabel, duplicateClipsAt, newClip } from './audio/clips';
 import { loadAudioInfo } from './audio/waveform';
 import { copyClips, copyKeys, copyLayers, pasteClips, pasteKeys, pasteKeysMessage, pasteLayers, type Clipboard, type CopiedKey, type PasteKeysResult } from './clipboard';
-import { duplicatePlacement, MAX_VIDEO_SEC, resizeScene } from './sceneTiming';
+import { duplicatePlacement, MAX_VIDEO_SEC, moveSceneInList, resizeScene, type SceneMove } from './sceneTiming';
 import { deepCloneLayer, findLayer, snapToFrame, useEditor } from './store';
 
 const S = () => useEditor.getState();
@@ -120,8 +120,19 @@ export function deleteScene(sceneId: string) {
   });
 }
 
+/** Scenes list ↑/↓: see sceneTiming.moveSceneInList. One undo step; a toast when only the drawing order changed. */
 export function moveScene(sceneId: string, delta: -1 | 1) {
-  S().commit((d) => moveInArray(d.scenes, (s) => s.id === sceneId, delta));
+  const { scenes } = S().project;
+  const i = scenes.findIndex((s) => s.id === sceneId);
+  const moved = scenes[i];
+  const other = scenes[i + delta];
+  if (!moved || !other) return;
+  let result = null as SceneMove;
+  S().commit((d) => void (result = moveSceneInList(d.scenes, sceneId, delta)));
+  const onTop = delta > 0 ? moved : other;
+  if (result === 'stacked')
+    S().toast(`${moved.name} and ${other.name} overlap in time, so only the drawing order changed: ${onTop.name} is now drawn on top where they overlap.`);
+  if (result === 'blocked') S().toast(`${moved.name} and ${other.name} can’t swap places: another scene plays between them. Drag the scene blocks in the timeline instead.`, 'error');
 }
 
 export function renameScene(sceneId: string, name: string) {

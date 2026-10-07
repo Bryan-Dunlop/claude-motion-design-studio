@@ -52,16 +52,16 @@ test('scenes and layers panels: create, duplicate, rename, reorder, hide, lock, 
   await page.getByTestId('scene-item-0').locator('.name').dblclick();
   await page.locator('.rename').fill('Intro');
   await page.locator('.rename').press('Enter');
-  // Duplicate, reorder down, delete.
+  // Duplicate (the copy goes after the last scene), reorder down, delete.
   await page.getByTestId('scene-item-0').locator('button[title^="Duplicate scene"]').click();
   st = await getState(page);
-  expect(st.project.scenes.map((s) => s.name)).toEqual(['Intro', 'Intro copy', 'Scene 2']);
+  expect(st.project.scenes.map((s) => s.name)).toEqual(['Intro', 'Scene 2', 'Intro copy']);
   await page.getByTestId('scene-item-0').locator('button[title^="Move scene down"]').click();
   st = await getState(page);
-  expect(st.project.scenes.map((s) => s.name)).toEqual(['Intro copy', 'Intro', 'Scene 2']);
+  expect(st.project.scenes.map((s) => s.name)).toEqual(['Scene 2', 'Intro', 'Intro copy']);
   await page.getByTestId('scene-item-2').locator('button[title^="Delete scene"]').click();
   st = await getState(page);
-  expect(st.project.scenes.map((s) => s.name)).toEqual(['Intro copy', 'Intro']);
+  expect(st.project.scenes.map((s) => s.name)).toEqual(['Scene 2', 'Intro']);
 
   // Layers in the selected scene.
   await page.getByTestId('scene-item-1').locator('.name').click();

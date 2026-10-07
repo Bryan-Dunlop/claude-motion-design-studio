@@ -79,16 +79,16 @@ export function LayersPanel() {
             <InlineName value={s.name} onRename={(v) => renameScene(s.id, v)} />
             <span className="muted small">{s.duration.toFixed(1)}s</span>
             <span className="actions">
-              <button title="Move scene up (earlier in the list)" disabled={i === 0} onClick={(e) => (e.stopPropagation(), moveScene(s.id, -1))}>
+              <button title="Move scene up (earlier in the list)" disabled={i === 0} onClick={(e) => (e.stopPropagation(), moveScene(s.id, -1))} data-testid={`scene-up-${i}`}>
                 ↑
               </button>
-              <button title="Move scene down" disabled={i === project.scenes.length - 1} onClick={(e) => (e.stopPropagation(), moveScene(s.id, 1))}>
+              <button title="Move scene down" disabled={i === project.scenes.length - 1} onClick={(e) => (e.stopPropagation(), moveScene(s.id, 1))} data-testid={`scene-down-${i}`}>
                 ↓
               </button>
-              <button title="Duplicate scene (with all its layers)" onClick={(e) => (e.stopPropagation(), duplicateScene(s.id))}>
+              <button title="Duplicate scene (with all its layers)" onClick={(e) => (e.stopPropagation(), duplicateScene(s.id))} data-testid={`scene-duplicate-${i}`}>
                 ⧉
               </button>
-              <button title="Delete scene and its layers" onClick={(e) => (e.stopPropagation(), deleteScene(s.id))}>
+              <button title="Delete scene and its layers" onClick={(e) => (e.stopPropagation(), deleteScene(s.id))} data-testid={`scene-delete-${i}`}>
                 ✕
               </button>
             </span>

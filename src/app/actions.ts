@@ -9,7 +9,7 @@ import { emptyProject, ProjectSchema, type Asset, type AudioClip, type Layer, ty
 import { clockLabel, duplicateClipsAt, newClip } from './audio/clips';
 import { loadAudioInfo } from './audio/waveform';
 import { copyClips, copyKeys, copyLayers, pasteClips, pasteKeys, pasteKeysMessage, pasteLayers, type Clipboard, type CopiedKey, type PasteKeysResult } from './clipboard';
-import { resizeScene } from './sceneTiming';
+import { duplicatePlacement, MAX_VIDEO_SEC, resizeScene } from './sceneTiming';
 import { deepCloneLayer, findLayer, snapToFrame, useEditor } from './store';
 
 const S = () => useEditor.getState();
@@ -93,18 +93,25 @@ function targetSceneId(): string | null {
   return atHead?.id ?? null;
 }
 
+/**
+ * ⧉: a copy of a scene (all its layers, new ids) after the last scene — last in the list too, which is the order scenes
+ * play in. The video gets longer when the copy doesn't fit. One undo step; the playhead moves to the copy.
+ */
 export function duplicateScene(sceneId: string) {
-  const id = makeId('scene');
+  const { project } = S();
+  const src = project.scenes.find((s) => s.id === sceneId);
+  if (!src) return;
+  const place = duplicatePlacement(project, src);
+  if (!place) return S().toast(`There is no room for a copy of ${src.name}: a video can be at most ${MAX_VIDEO_SEC / 60} minutes long.`, 'error');
+  const copy: Scene = { ...structuredClone(src), id: makeId('scene'), name: `${src.name} copy`, start: place.start, layers: src.layers.map(deepCloneLayer) };
+  const longer = place.durationSec > project.settings.durationSec;
   S().commit((d) => {
-    const i = d.scenes.findIndex((s) => s.id === sceneId);
-    if (i < 0) return;
-    const src = d.scenes[i] as Scene;
-    const copy: Scene = { ...JSON.parse(JSON.stringify(src)), id, name: `${src.name} copy` };
-    copy.layers = src.layers.map(deepCloneLayer);
-    copy.start = Math.min(src.start + src.duration, Math.max(0, d.settings.durationSec - src.duration));
-    d.scenes.splice(i + 1, 0, copy);
+    d.scenes.push(copy);
+    d.settings.durationSec = place.durationSec;
   });
-  S().select({ sceneId: id, layerIds: [], audioIds: [] });
+  S().select({ sceneId: copy.id, layerIds: [], audioIds: [] });
+  S().setTime(copy.start);
+  S().toast(`${copy.name} starts at ${copy.start.toFixed(2)} s${longer ? ` — the video is now ${+place.durationSec.toFixed(2)} s` : ''}.`);
 }
 
 export function deleteScene(sceneId: string) {

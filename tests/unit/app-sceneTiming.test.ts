@@ -1,9 +1,9 @@
 // Scene timing edits (src/app/sceneTiming.ts): layers follow a scene's end when it gets shorter or longer.
 import { produce } from 'immer';
 import { describe, expect, it } from 'vitest';
-import { followSceneEnd, resizeScene } from '../../src/app/sceneTiming';
+import { duplicatePlacement, followSceneEnd, MAX_VIDEO_SEC, resizeScene } from '../../src/app/sceneTiming';
 import { makeLayer, makeScene } from '../../src/shared/factories';
-import type { Keyframe, Scene } from '../../src/shared/schema';
+import type { Keyframe, Scene, Settings } from '../../src/shared/schema';
 
 const FPS = 30;
 const key = (id: string, time: number, value: number): Keyframe => ({ id, time, value, easing: { type: 'linear' } });
@@ -65,5 +65,25 @@ describe('resizeScene', () => {
     expect(lengths(s)).toEqual(lengths(origin));
     s = produce(s, (draft) => void resizeScene(draft, 9, FPS, origin));
     expect(lengths(s)).toEqual({ full: 9, past: 9, early: 4, late: 5 });
+  });
+});
+
+describe('duplicatePlacement', () => {
+  const at = (start: number, duration: number) => makeScene({ id: `s${start}`, name: 'S', start, duration, layers: [] });
+  const project = (durationSec: number, ...scenes: Scene[]) => ({ scenes, settings: { durationSec } as Settings });
+
+  it('goes after the last scene (never on top of one), making the video longer only when it has to', () => {
+    expect(duplicatePlacement(project(15, at(0, 15)), at(0, 15))).toEqual({ start: 15, durationSec: 30 });
+    // A copy of the first of two scenes still goes after the last one.
+    expect(duplicatePlacement(project(15, at(0, 7.5), at(7.5, 7.5)), at(0, 7.5))).toEqual({ start: 15, durationSec: 22.5 });
+    // Room after the last scene: the video keeps its length.
+    expect(duplicatePlacement(project(40, at(0, 7.5), at(7.5, 7.5)), at(7.5, 7.5))).toEqual({ start: 15, durationSec: 40 });
+    // The last scene in time decides, not the last in the list; floating-point noise is dropped.
+    expect(duplicatePlacement(project(10, at(0.1 + 0.2, 7.2), at(0, 0.3)), at(0, 2.5))).toEqual({ start: 7.5, durationSec: 10 });
+  });
+
+  it('refuses when the video would get longer than the file allows', () => {
+    expect(duplicatePlacement(project(3000, at(0, 3000)), at(0, 600))).toEqual({ start: 3000, durationSec: MAX_VIDEO_SEC });
+    expect(duplicatePlacement(project(3000, at(0, 3000)), at(0, 601))).toBeNull();
   });
 });

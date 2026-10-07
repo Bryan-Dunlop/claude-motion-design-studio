@@ -1,7 +1,13 @@
 // Scene timing edits that keep a scene's layers in step with it. Pure: they edit the draft the caller commits (one
 // undo step), or return numbers.
 import type { Draft } from 'immer';
-import type { Layer, Scene } from '../shared/schema';
+import type { Layer, Project, Scene } from '../shared/schema';
+
+/** The longest video the project file allows (settings.durationSec). */
+export const MAX_VIDEO_SEC = 3600;
+
+/** Drop floating-point noise such as 22.500000000000004. */
+const clean = (v: number) => Math.round(v * 1e9) / 1e9;
 
 /**
  * A layer's duration after its scene's length changes from `before` to `after` (layer times are scene-relative):
@@ -38,4 +44,16 @@ export function resizeScene(scene: Draft<Scene>, duration: number, fps: number, 
   }
   scene.duration = duration;
   return changed;
+}
+
+/**
+ * Where a copy of `src` goes: right after the last scene, so it never lands on top of another scene, keeping its
+ * length. `durationSec` is the video length it needs (longer only when the copy doesn't fit); null when that would
+ * be longer than a video can be.
+ */
+export function duplicatePlacement(project: Pick<Project, 'scenes' | 'settings'>, src: Pick<Scene, 'duration'>): { start: number; durationSec: number } | null {
+  const start = clean(Math.max(0, ...project.scenes.map((s) => s.start + s.duration)));
+  const end = clean(start + src.duration);
+  if (end > MAX_VIDEO_SEC) return null;
+  return { start, durationSec: Math.max(project.settings.durationSec, end) };
 }

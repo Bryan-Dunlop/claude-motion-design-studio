@@ -518,6 +518,31 @@ export async function importFiles(files: File[]) {
   }
 }
 
+/**
+ * Cursor panel "Import sound…": add a sound file to the project — without a clip on the timeline — and make it the
+ * click sound of cursor `layerId` (keeping its click volume), in one undo step. A file already in the project is reused.
+ */
+export async function importClickSound(layerId: string, file: File) {
+  try {
+    if (classify(file) !== 'audio') throw new Error(`${file.name}: pick a sound file (MP3, WAV, OGG, M4A, AAC or FLAC) to use as the click sound.`);
+    const asset = await uploadFile(file);
+    const existing = S().project.assets.find((a) => a.hash === asset.hash && a.type === 'audio');
+    const use = existing ?? asset;
+    let cursorName = '';
+    S().commit((d) => {
+      const l = findLayer(d, layerId)?.layer;
+      if (l?.type !== 'cursor') return;
+      if (!existing) d.assets.push(asset);
+      l.clickSound = { assetId: use.id, volume: l.clickSound?.volume ?? 1 };
+      cursorName = l.name;
+    });
+    if (!cursorName) return S().toast(`${file.name} was not added: its cursor layer is gone.`, 'error');
+    S().toast(`${use.originalName} is now the click sound of ${cursorName}.`);
+  } catch (e) {
+    S().toast((e as Error).message, 'error');
+  }
+}
+
 // ---------------------------------------------------------------- audio clips
 
 /**

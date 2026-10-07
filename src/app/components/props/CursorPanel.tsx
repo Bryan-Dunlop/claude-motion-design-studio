@@ -1,6 +1,7 @@
 import { makeId } from '../../../shared/presets';
 import { cursorPosition } from '../../../shared/renderFrame';
 import type { CursorLayer, Scene } from '../../../shared/schema';
+import { AUDIO_EXTS, importClickSound } from '../../actions';
 import { findLayer, useEditor } from '../../store';
 import { ColorField, NumberField, Row, Section, Select } from '../Fields';
 
@@ -79,15 +80,35 @@ export function CursorPanel({ layer, scene }: { layer: CursorLayer; scene: Scene
       <button title="Add a click (press + ripple) at the playhead time" onClick={() => edit((l) => void l.clicks.push({ id: makeId('click'), time: Math.round(local * 100) / 100 }))}>
         + Click at playhead
       </button>
-      <Row label="Click sound" tip="A sound played at every click (one per click; it follows the clicks when you move them). Import a sound file first.">
+      <Row label="Click sound" tip="A sound played at every click (one per click; it follows the clicks when you move them). Pick one of the project's sounds, or add a file with Import sound… below.">
         <Select
           value={layer.clickSound?.assetId ?? ''}
           testId="cursor-click-sound"
-          tip="Sound played at every click"
-          options={[{ value: '', label: sounds.length ? 'None' : 'None (import a sound first)' }, ...sounds.map((a) => ({ value: a.id, label: a.originalName }))]}
+          tip="Sound played at every click. Import sound… below adds a new one."
+          options={[{ value: '', label: sounds.length ? 'None' : 'None (add one below)' }, ...sounds.map((a) => ({ value: a.id, label: a.originalName }))]}
           onChange={(id) => edit((l) => void (l.clickSound = id ? { assetId: id, volume: l.clickSound?.volume ?? 1 } : null))}
         />
       </Row>
+      <div className="btn-row left">
+        <label
+          className="button"
+          title="Add a sound file (MP3, WAV, OGG, M4A, AAC or FLAC) and use it as this cursor's click sound. It is not added to the Audio rows, so it only plays at the clicks."
+          data-testid="cursor-import-sound"
+        >
+          Import sound…
+          <input
+            type="file"
+            hidden
+            accept={AUDIO_EXTS}
+            data-testid="cursor-import-sound-input"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void importClickSound(layer.id, file);
+              e.target.value = '';
+            }}
+          />
+        </label>
+      </div>
       {layer.clickSound && (
         <Row label="Volume %" tip="Loudness of the click sound. 100% = as recorded.">
           <NumberField

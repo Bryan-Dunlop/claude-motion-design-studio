@@ -28,7 +28,8 @@ with "running scripts is disabled on this system"; if you prefer PowerShell, run
    downloaded file → **Extract All…**, and move the extracted folder to a short path such as `C:\MotionStudio`. That
    folder — the one with `package.json` and `Start Motion Studio.cmd` directly inside it — is the **app folder**.
    (With Git installed you can instead run `git clone <repository URL> C:\MotionStudio`.)
-6. Double-click **Start Motion Studio.cmd** in the app folder. The first time, it installs what the app needs (about
+6. Double-click **Start Motion Studio.cmd** in the app folder. (Windows may ask whether to run a file that came from
+   the internet: click **Run**, or **More info → Run anyway**.) The first time, it installs what the app needs (about
    200 MB, a few minutes) and prepares the editor; then it opens the editor in your browser at
    **http://127.0.0.1:5173**.
 7. Keep the black Motion Studio window open while you work, and close it to stop Motion Studio. Next time, just

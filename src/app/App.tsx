@@ -200,9 +200,9 @@ export function App() {
       <header className="toolbar">
         <div className="group">
           <strong className="brand">Motion Studio</strong>
-          <span className="doc-name" data-testid="doc-name">
+          <span className="doc-name" data-testid="doc-name" title={projectName ?? 'Untitled'}>
             {dirty && <span className="dirty-dot" title="Unsaved changes" data-testid="dirty-dot">●</span>}
-            {projectName ?? 'Untitled'}
+            <span className="doc-title">{projectName ?? 'Untitled'}</span>
           </span>
         </div>
         <div className="group">
@@ -448,7 +448,7 @@ function PlaybackBar() {
           preparing audio…
         </span>
       )}
-      <span className="timecode" data-testid="timecode">
+      <span className="timecode" data-testid="timecode" title={`Playhead / video length — frame ${frame} / ${total - 1}`}>
         {formatTime(time)} / {formatTime(project.settings.durationSec)}
       </span>
       <span className="frame" data-testid="frame-counter">

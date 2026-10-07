@@ -391,10 +391,13 @@ export async function pasteClipboard(opts: { absolute?: boolean } = {}) {
     S().select({ audioIds: ids });
     return;
   }
-  const created = existing ? null : planNewScene(S().project, at).scene;
+  // No scene to paste into: a new one, placed like "+ Scene" (it may split the last scene, in the same undo step).
+  const plan = existing ? null : planNewScene(S().project, at);
+  const created = plan?.scene ?? null;
   const sceneId = existing ?? created!.id;
   let ids: string[] = [];
   S().commit((d) => {
+    applySplit(d, plan?.split ?? null);
     if (created) d.scenes.push(created);
     ids = pasteLayers(d, sceneId, clip);
   });

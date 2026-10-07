@@ -136,3 +136,18 @@ test('a source file replaced by hand (its bytes no longer match the recorded has
   await expect.poll(async () => (await getState(page)).project.assets.map((a) => a.hash)).toEqual([real]);
   await expect.poll(async () => (await getState(page)).missing).toEqual([]);
 });
+
+test('pasting layers with no scene at the playhead makes a new scene that does not overlap the last one', async ({ page }) => {
+  await page.goto('/');
+  await page.getByTestId('add-rect').click();
+  await page.getByTestId('layer-item-Rectangle').locator('.name').click();
+  await shortcut(page, 'Control+c');
+  // The playhead at the very end (no scene there) and nothing selected.
+  await setTime(page, 15);
+  await store(page, 's.select({ sceneId: null, layerIds: [], audioIds: [] })');
+  const h = await past(page);
+  await shortcut(page, 'Control+v');
+  const scenes = (await getState(page)).project.scenes.map((s) => [s.start, +(s.start + s.duration).toFixed(6), s.layers.length]);
+  expect(scenes).toEqual([[0, 7.5, 1], [7.5, 15, 1]]);
+  expect(await past(page)).toBe(h + 1);
+});

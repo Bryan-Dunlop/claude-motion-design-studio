@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { Layer } from '../../shared/schema';
-import { addClip, addScene, deleteLayers, deleteScene, duplicateLayers, duplicateScene, moveLayer, moveScene, renameScene, updateLayers } from '../actions';
+import { ADD_SCENE_TIP, addClip, addScene, deleteLayers, deleteScene, duplicateLayers, duplicateScene, moveLayer, moveScene, renameScene, updateLayers } from '../actions';
 import { clockLabel } from '../audio/clips';
 import { useEditor } from '../store';
 import { RelinkButton } from './Properties';
@@ -47,6 +47,12 @@ function InlineName({ value, onRename, testId }: { value: string; onRename: (v: 
 
 const ICON: Record<Layer['type'], string> = { text: 'T', image: '▣', shape: '◼', cursor: '➚' };
 
+const OVERLAP_NOTE = 'If the two overlap in time, only the drawing order changes (lower in the list = drawn on top).';
+const MOVE_TIP = {
+  up: `Move scene up: it plays before the scene above it (they swap places in the timeline). ${OVERLAP_NOTE}`,
+  down: `Move scene down: it plays after the scene below it (they swap places in the timeline). ${OVERLAP_NOTE}`,
+};
+
 export function LayersPanel() {
   const project = useEditor((s) => s.project);
   const selection = useEditor((s) => s.selection);
@@ -60,7 +66,7 @@ export function LayersPanel() {
     <div className="side">
       <div className="panel-head">
         <h3>Scenes</h3>
-        <button onClick={addScene} title="Add a new scene after the last one" data-testid="add-scene">
+        <button onClick={addScene} title={ADD_SCENE_TIP} data-testid="add-scene">
           + Scene
         </button>
       </div>
@@ -79,16 +85,16 @@ export function LayersPanel() {
             <InlineName value={s.name} onRename={(v) => renameScene(s.id, v)} />
             <span className="muted small">{s.duration.toFixed(1)}s</span>
             <span className="actions">
-              <button title="Move scene up (earlier in the list)" disabled={i === 0} onClick={(e) => (e.stopPropagation(), moveScene(s.id, -1))}>
+              <button title={MOVE_TIP.up} disabled={i === 0} onClick={(e) => (e.stopPropagation(), moveScene(s.id, -1))} data-testid={`scene-up-${i}`}>
                 ↑
               </button>
-              <button title="Move scene down" disabled={i === project.scenes.length - 1} onClick={(e) => (e.stopPropagation(), moveScene(s.id, 1))}>
+              <button title={MOVE_TIP.down} disabled={i === project.scenes.length - 1} onClick={(e) => (e.stopPropagation(), moveScene(s.id, 1))} data-testid={`scene-down-${i}`}>
                 ↓
               </button>
-              <button title="Duplicate scene (with all its layers)" onClick={(e) => (e.stopPropagation(), duplicateScene(s.id))}>
+              <button title="Duplicate scene (with all its layers)" onClick={(e) => (e.stopPropagation(), duplicateScene(s.id))} data-testid={`scene-duplicate-${i}`}>
                 ⧉
               </button>
-              <button title="Delete scene and its layers" onClick={(e) => (e.stopPropagation(), deleteScene(s.id))}>
+              <button title="Delete scene and its layers" onClick={(e) => (e.stopPropagation(), deleteScene(s.id))} data-testid={`scene-delete-${i}`}>
                 ✕
               </button>
             </span>

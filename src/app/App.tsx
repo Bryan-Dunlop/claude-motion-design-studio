@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { frameCount } from '../shared/renderFrame';
 import type { ShapeKind } from '../shared/schema';
 import {
+  ADD_SCENE_TIP,
   addCursor,
   addScene,
   addShape,
@@ -199,9 +200,9 @@ export function App() {
       <header className="toolbar">
         <div className="group">
           <strong className="brand">Motion Studio</strong>
-          <span className="doc-name" data-testid="doc-name">
+          <span className="doc-name" data-testid="doc-name" title={projectName ?? 'Untitled'}>
             {dirty && <span className="dirty-dot" title="Unsaved changes" data-testid="dirty-dot">●</span>}
-            {projectName ?? 'Untitled'}
+            <span className="doc-title">{projectName ?? 'Untitled'}</span>
           </span>
         </div>
         <div className="group">
@@ -223,7 +224,7 @@ export function App() {
           <button onClick={() => useEditor.getState().redo()} disabled={!canRedo} title="Redo (Ctrl+Shift+Z)" data-testid="btn-redo">↷</button>
         </div>
         <div className="group">
-          <button onClick={addScene} title="Add a scene">+ Scene</button>
+          <button onClick={addScene} title={ADD_SCENE_TIP} data-testid="toolbar-add-scene">+ Scene</button>
           <button onClick={addText} title="Add a text layer" data-testid="add-text">+ Text</button>
           <button onClick={() => addShape('rect')} title="Add a rectangle" data-testid="add-rect">+ Rect</button>
           <Menu label="+ Shape ▾" title="Add a shape layer" testId="add-shape-menu" className="shape-menu">
@@ -447,7 +448,7 @@ function PlaybackBar() {
           preparing audio…
         </span>
       )}
-      <span className="timecode" data-testid="timecode">
+      <span className="timecode" data-testid="timecode" title={`Playhead / video length — frame ${frame} / ${total - 1}`}>
         {formatTime(time)} / {formatTime(project.settings.durationSec)}
       </span>
       <span className="frame" data-testid="frame-counter">

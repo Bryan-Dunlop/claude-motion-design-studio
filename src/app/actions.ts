@@ -3,12 +3,13 @@ import type { Draft } from 'immer';
 import { assetUrl } from '../shared/assetUrl';
 import { makeId } from '../shared/presets';
 import { makeLayer, makeScene } from '../shared/factories';
-import { aspectOf, formatSize } from '../shared/fitToFrame';
+import { aspectOf, fitToFrame, formatSize } from '../shared/fitToFrame';
 import { safeFileName } from '../shared/names';
 import { emptyProject, ProjectSchema, type Asset, type AudioClip, type Layer, type Project, type Scene, type Settings, type ShapeKind } from '../shared/schema';
 import { clockLabel, duplicateClipsAt, newClip } from './audio/clips';
 import { loadAudioInfo } from './audio/waveform';
 import { copyClips, copyKeys, copyLayers, pasteClips, pasteKeys, pasteKeysMessage, pasteLayers, type Clipboard, type CopiedKey, type PasteKeysResult } from './clipboard';
+import { duplicatePlacement, MAX_VIDEO_SEC, moveSceneInList, resizeScene, type SceneMove } from './sceneTiming';
 import { deepCloneLayer, findLayer, snapToFrame, useEditor } from './store';
 
 const S = () => useEditor.getState();
@@ -33,8 +34,9 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
  * Where a new scene goes, so scenes follow each other (and a transition always has a scene to come from):
  * - the first scene covers the whole video;
  * - if there is room after the last scene, the new scene fills it;
- * - otherwise the last scene is split — at the playhead when it is inside that scene, else in the middle.
- * Layers are never deleted or shortened; only the split scene's length changes.
+ * - otherwise the last scene is split — at the playhead when it is inside that scene, else in the middle. Its layers
+ *   that would run past the cut end there (sceneTiming.resizeScene), so their exit animations still play.
+ * Layers and keyframes are never deleted.
  */
 function planNewScene(project: Project, time: number): { scene: Scene; split: { id: string; duration: number } | null } {
   const { durationSec: total, fps } = project.settings;
@@ -60,20 +62,29 @@ function showScene(scene: Scene) {
   if (time < scene.start || time >= scene.start + scene.duration) S().setTime(scene.start);
 }
 
+/** Shorten the scene `split` names (planNewScene) in a draft; returns how many of its layers now end earlier. */
+function applySplit(d: Draft<Project>, split: { id: string; duration: number } | null): number {
+  const s = split && d.scenes.find((x) => x.id === split.id);
+  return s ? resizeScene(s, split.duration, d.settings.fps) : 0;
+}
+
+/** Tooltip of the "+ Scene" buttons (Scenes panel and toolbar): what planNewScene does, in plain words. */
+export const ADD_SCENE_TIP =
+  'Add a scene. The first one fills the whole video; each next one fills the time after the last scene. If no time is left, the last scene is split in two (at the playhead if it is inside that scene, otherwise in the middle) and its layers that ran past the cut end there.';
+
 export function addScene() {
   const { scene, split } = planNewScene(S().project, S().time);
+  let cut = 0;
   S().commit((d) => {
-    if (split) {
-      const s = d.scenes.find((x) => x.id === split.id);
-      if (s) s.duration = split.duration;
-    }
+    cut = applySplit(d, split);
     d.scenes.push(scene);
   });
   S().select({ sceneId: scene.id, layerIds: [], audioIds: [] });
   showScene(scene);
   if (split) {
     const name = S().project.scenes.find((x) => x.id === split.id)?.name ?? 'The previous scene';
-    S().toast(`${scene.name} starts at ${scene.start.toFixed(2)} s — ${name} now ends there.`);
+    const layers = cut === 0 ? '' : cut === 1 ? ' 1 of its layers now ends there too.' : ` ${cut} of its layers now end there too.`;
+    S().toast(`${scene.name} starts at ${scene.start.toFixed(2)} s — ${name} now ends there.${layers}`);
   }
   return scene.id;
 }
@@ -86,18 +97,25 @@ function targetSceneId(): string | null {
   return atHead?.id ?? null;
 }
 
+/**
+ * ⧉: a copy of a scene (all its layers, new ids) after the last scene — last in the list too, which is the order scenes
+ * play in. The video gets longer when the copy doesn't fit. One undo step; the playhead moves to the copy.
+ */
 export function duplicateScene(sceneId: string) {
-  const id = makeId('scene');
+  const { project } = S();
+  const src = project.scenes.find((s) => s.id === sceneId);
+  if (!src) return;
+  const place = duplicatePlacement(project, src);
+  if (!place) return S().toast(`There is no room for a copy of ${src.name}: a video can be at most ${MAX_VIDEO_SEC / 60} minutes long.`, 'error');
+  const copy: Scene = { ...structuredClone(src), id: makeId('scene'), name: `${src.name} copy`, start: place.start, layers: src.layers.map(deepCloneLayer) };
+  const longer = place.durationSec > project.settings.durationSec;
   S().commit((d) => {
-    const i = d.scenes.findIndex((s) => s.id === sceneId);
-    if (i < 0) return;
-    const src = d.scenes[i] as Scene;
-    const copy: Scene = { ...JSON.parse(JSON.stringify(src)), id, name: `${src.name} copy` };
-    copy.layers = src.layers.map(deepCloneLayer);
-    copy.start = Math.min(src.start + src.duration, Math.max(0, d.settings.durationSec - src.duration));
-    d.scenes.splice(i + 1, 0, copy);
+    d.scenes.push(copy);
+    d.settings.durationSec = place.durationSec;
   });
-  S().select({ sceneId: id, layerIds: [], audioIds: [] });
+  S().select({ sceneId: copy.id, layerIds: [], audioIds: [] });
+  S().setTime(copy.start);
+  S().toast(`${copy.name} starts at ${copy.start.toFixed(2)} s${longer ? ` — the video is now ${+place.durationSec.toFixed(2)} s` : ''}.`);
 }
 
 export function deleteScene(sceneId: string) {
@@ -106,8 +124,19 @@ export function deleteScene(sceneId: string) {
   });
 }
 
+/** Scenes list ↑/↓: see sceneTiming.moveSceneInList. One undo step; a toast when only the drawing order changed. */
 export function moveScene(sceneId: string, delta: -1 | 1) {
-  S().commit((d) => moveInArray(d.scenes, (s) => s.id === sceneId, delta));
+  const { scenes } = S().project;
+  const i = scenes.findIndex((s) => s.id === sceneId);
+  const moved = scenes[i];
+  const other = scenes[i + delta];
+  if (!moved || !other) return;
+  let result = null as SceneMove;
+  S().commit((d) => void (result = moveSceneInList(d.scenes, sceneId, delta)));
+  const onTop = delta > 0 ? moved : other;
+  if (result === 'stacked')
+    S().toast(`${moved.name} and ${other.name} overlap in time, so only the drawing order changed: ${onTop.name} is now drawn on top where they overlap.`);
+  if (result === 'blocked') S().toast(`${moved.name} and ${other.name} can’t swap places: another scene plays between them. Drag the scene blocks in the timeline instead.`, 'error');
 }
 
 export function renameScene(sceneId: string, name: string) {
@@ -154,10 +183,7 @@ function addLayer(make: (scene: Scene, settings: Settings) => Layer) {
   const sceneId = existing ?? created!.id;
   let id = '';
   S().commit((d) => {
-    if (plan?.split) {
-      const s = d.scenes.find((x) => x.id === plan.split!.id);
-      if (s) s.duration = plan.split.duration;
-    }
+    applySplit(d, plan?.split ?? null);
     if (created) d.scenes.push(created);
     const scene = d.scenes.find((s) => s.id === sceneId) as Scene | undefined;
     if (!scene) return;
@@ -426,6 +452,23 @@ export function updateSettings(patch: Partial<Settings>) {
   if (time > project.settings.durationSec) S().setTime(project.settings.durationSec);
 }
 
+/**
+ * Project settings → Resolution: a new frame size of the same shape, with the whole composition scaled to it (the
+ * fitToFrame mapping "Make a copy in another format" uses), so the picture stays the same. One undo step.
+ */
+export function resizeComposition(width: number, height: number) {
+  const { project } = S();
+  const { width: W, height: H } = project.settings;
+  if (width === W && height === H) return;
+  const fitted = fitToFrame(project, width, height);
+  S().commit((d) => {
+    d.settings = fitted.settings;
+    d.scenes = fitted.scenes;
+  });
+  const k = Math.min(width / W, height / H);
+  S().toast(`Resized to ${width}×${height}: every layer was scaled with the frame (× ${+k.toFixed(3)}).`);
+}
+
 // ---------------------------------------------------------------- assets
 
 async function sha256Hex(buf: ArrayBuffer) {
@@ -506,6 +549,31 @@ export async function importFiles(files: File[]) {
     } catch (e) {
       S().toast((e as Error).message, 'error');
     }
+  }
+}
+
+/**
+ * Cursor panel "Import sound…": add a sound file to the project — without a clip on the timeline — and make it the
+ * click sound of cursor `layerId` (keeping its click volume), in one undo step. A file already in the project is reused.
+ */
+export async function importClickSound(layerId: string, file: File) {
+  try {
+    if (classify(file) !== 'audio') throw new Error(`${file.name}: pick a sound file (MP3, WAV, OGG, M4A, AAC or FLAC) to use as the click sound.`);
+    const asset = await uploadFile(file);
+    const existing = S().project.assets.find((a) => a.hash === asset.hash && a.type === 'audio');
+    const use = existing ?? asset;
+    let cursorName = '';
+    S().commit((d) => {
+      const l = findLayer(d, layerId)?.layer;
+      if (l?.type !== 'cursor') return;
+      if (!existing) d.assets.push(asset);
+      l.clickSound = { assetId: use.id, volume: l.clickSound?.volume ?? 1 };
+      cursorName = l.name;
+    });
+    if (!cursorName) return S().toast(`${file.name} was not added: its cursor layer is gone.`, 'error');
+    S().toast(`${use.originalName} is now the click sound of ${cursorName}.`);
+  } catch (e) {
+    S().toast((e as Error).message, 'error');
   }
 }
 

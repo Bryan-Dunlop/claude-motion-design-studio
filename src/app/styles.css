@@ -37,13 +37,22 @@ pre { white-space: pre-wrap; margin: 0; }
 .warn { color: var(--warn); }
 .help { color: var(--muted); font-size: 11.5px; margin: 4px 0 8px; }
 
-.app { display: grid; grid-template-rows: auto 1fr 240px; height: 100%; }
-.toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 6px 10px; background: var(--panel); border-bottom: 1px solid var(--line); }
-.toolbar .group { display: flex; gap: 4px; align-items: center; }
+/* minmax(0, 1fr): a wide toolbar can never make the page wider than the window (its name is cut instead). */
+.app { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr 240px; height: 100%; }
+.toolbar { display: flex; gap: 10px; align-items: center; padding: 6px 10px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.toolbar .group { display: flex; gap: 4px; align-items: center; flex: none; }
+.toolbar button { white-space: nowrap; }
+/* One row: the project name gives way first (cut with an ellipsis; the full name is in its tooltip). */
+.toolbar .group:first-child { flex: 0 1 auto; min-width: 0; }
 .toolbar .right { margin-left: auto; }
-.brand { margin-right: 8px; }
-.doc-name { color: var(--muted); display: inline-flex; gap: 4px; align-items: center; }
-.dirty-dot { color: var(--warn); }
+.brand { margin-right: 8px; flex: none; white-space: nowrap; }
+.doc-name { color: var(--muted); display: inline-flex; gap: 4px; align-items: center; min-width: 0; max-width: 320px; }
+.doc-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.dirty-dot { color: var(--warn); flex: none; }
+@media (max-width: 1440px) {
+  .toolbar { gap: 6px; }
+  .toolbar button { padding: 4px 7px; }
+}
 .menu { position: relative; }
 .menu-trigger.open { border-color: var(--accent); }
 .menu-list { position: absolute; z-index: 20; top: 110%; left: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px; display: flex; flex-direction: column; gap: 3px; min-width: 220px; box-shadow: 0 8px 24px #0008; }
@@ -94,7 +103,16 @@ pre { white-space: pre-wrap; margin: 0; }
 .safe-label { fill: #ffd23f; font-weight: 600; cursor: help; paint-order: stroke; stroke: #000a; stroke-width: 3px; stroke-linejoin: round; }
 .empty-hint { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); background: #000a; padding: 6px 12px; border-radius: 6px; color: var(--muted); pointer-events: none; }
 
-.playback { display: flex; gap: 4px; align-items: center; padding: 5px 10px; background: var(--panel); border-top: 1px solid var(--line); }
+.playback { display: flex; gap: 4px; align-items: center; padding: 5px 10px; background: var(--panel); border-top: 1px solid var(--line); overflow: hidden; }
+.playback > * { flex: none; white-space: nowrap; }
+/* Never wrapped: on a narrow bar the frame counter goes (the timecode's tooltip has it); when a "preparing audio…" note
+   needs room too, it and the frame counter are cut, never the timecode. */
+.playback > .muted, .playback .frame { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.playback > .muted { flex: 0 10 auto; }
+.playback .frame { flex: 0 1 auto; }
+@media (max-width: 1339px) {
+  .playback .frame { display: none; }
+}
 .playback .play { min-width: 40px; justify-content: center; }
 .timecode { margin-left: 10px; font-variant-numeric: tabular-nums; font-family: ui-monospace, Consolas, monospace; }
 .frame { color: var(--muted); font-variant-numeric: tabular-nums; font-family: ui-monospace, Consolas, monospace; }

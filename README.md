@@ -166,7 +166,7 @@ about 64 s. Blur and transitions cost extra while they are on screen (see `docs/
 ## Works (tested)
 
 Everything below is covered by automated tests that pass. Run `npm test`:
-**377 unit tests** (vitest) and **134 end-to-end tests** (Playwright, real Chromium + ffmpeg), all passing on Linux; CI
+**392 unit tests** (vitest) and **147 end-to-end tests** (Playwright, real Chromium + ffmpeg), all passing on Linux; CI
 runs them on Ubuntu and Windows.
 
 The exact test names and measured numbers for every v2 feature are in [`docs/lane-a.md`](docs/lane-a.md) (rendering:

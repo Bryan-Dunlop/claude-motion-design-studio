@@ -314,3 +314,11 @@ test.describe('Scenes list ↑/↓ (R12)', () => {
     ]);
   });
 });
+
+test('“+ Scene” in the Scenes panel and in the toolbar say what it does, including the split (R13)', async ({ page }) => {
+  await page.goto('/');
+  const tip =
+    'Add a scene. The first one fills the whole video; each next one fills the time after the last scene. If no time is left, the last scene is split in two (at the playhead if it is inside that scene, otherwise in the middle) and its layers that ran past the cut end there.';
+  await expect(page.getByTestId('add-scene')).toHaveAttribute('title', tip);
+  await expect(page.locator('.toolbar').getByRole('button', { name: '+ Scene' })).toHaveAttribute('title', tip);
+});

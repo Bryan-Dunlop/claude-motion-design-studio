@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { Layer } from '../../shared/schema';
-import { addClip, addScene, deleteLayers, deleteScene, duplicateLayers, duplicateScene, moveLayer, moveScene, renameScene, updateLayers } from '../actions';
+import { ADD_SCENE_TIP, addClip, addScene, deleteLayers, deleteScene, duplicateLayers, duplicateScene, moveLayer, moveScene, renameScene, updateLayers } from '../actions';
 import { clockLabel } from '../audio/clips';
 import { useEditor } from '../store';
 import { RelinkButton } from './Properties';
@@ -66,7 +66,7 @@ export function LayersPanel() {
     <div className="side">
       <div className="panel-head">
         <h3>Scenes</h3>
-        <button onClick={addScene} title="Add a new scene after the last one" data-testid="add-scene">
+        <button onClick={addScene} title={ADD_SCENE_TIP} data-testid="add-scene">
           + Scene
         </button>
       </div>

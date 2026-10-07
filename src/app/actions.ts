@@ -68,6 +68,10 @@ function applySplit(d: Draft<Project>, split: { id: string; duration: number } |
   return s ? resizeScene(s, split.duration, d.settings.fps) : 0;
 }
 
+/** Tooltip of the "+ Scene" buttons (Scenes panel and toolbar): what planNewScene does, in plain words. */
+export const ADD_SCENE_TIP =
+  'Add a scene. The first one fills the whole video; each next one fills the time after the last scene. If no time is left, the last scene is split in two (at the playhead if it is inside that scene, otherwise in the middle) and its layers that ran past the cut end there.';
+
 export function addScene() {
   const { scene, split } = planNewScene(S().project, S().time);
   let cut = 0;

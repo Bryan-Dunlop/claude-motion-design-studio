@@ -11,6 +11,15 @@ export function CursorPanel({ layer, scene }: { layer: CursorLayer; scene: Scene
   const assets = useEditor((s) => s.project.assets);
   const sounds = assets.filter((a) => a.type === 'audio');
   const local = Math.min(Math.max(0, layer.duration > 0 ? time - scene.start - layer.start : 0), layer.duration);
+  // Points and clicks are added at the playhead only while it is on the part of the layer that shows (inside the layer
+  // and its scene); elsewhere the time would be clamped to the layer's first or last frame.
+  const from = scene.start + layer.start;
+  const to = Math.min(from + layer.duration, scene.start + scene.duration);
+  const inside = time >= from && time < to;
+  const whyNot = (what: string) =>
+    to > from
+      ? `The playhead (${time.toFixed(2)} s) is outside ${layer.name} (${from.toFixed(2)}–${to.toFixed(2)} s). Move it inside the layer to add ${what} there.`
+      : `${layer.name} starts after its scene ends, so it is never on screen.`;
   const edit = (fn: (l: CursorLayer) => void) =>
     commit((d) => {
       const l = findLayer(d, layer.id)?.layer;
@@ -53,8 +62,15 @@ export function CursorPanel({ layer, scene }: { layer: CursorLayer; scene: Scene
           </button>
         </div>
       ))}
+      {!inside && (
+        <p className="help" data-testid="cursor-outside-help">
+          Move the playhead inside this layer to add points or clicks at it.
+        </p>
+      )}
       <button
-        title="Add a path point at the playhead time, at the cursor's current position (then drag it)"
+        title={inside ? "Add a path point at the playhead time, at the cursor's current position (then drag it)" : whyNot('a point')}
+        disabled={!inside}
+        data-testid="cursor-add-point"
         onClick={() =>
           edit((l) => {
             const pos = cursorPosition(layer, local);
@@ -77,7 +93,12 @@ export function CursorPanel({ layer, scene }: { layer: CursorLayer; scene: Scene
           </button>
         </div>
       ))}
-      <button title="Add a click (press + ripple) at the playhead time" onClick={() => edit((l) => void l.clicks.push({ id: makeId('click'), time: Math.round(local * 100) / 100 }))}>
+      <button
+        title={inside ? 'Add a click (press + ripple) at the playhead time' : whyNot('a click')}
+        disabled={!inside}
+        data-testid="cursor-add-click"
+        onClick={() => edit((l) => void l.clicks.push({ id: makeId('click'), time: Math.round(local * 100) / 100 }))}
+      >
         + Click at playhead
       </button>
       <Row label="Click sound" tip="A sound played at every click (one per click; it follows the clicks when you move them). Pick one of the project's sounds, or add a file with Import sound… below.">

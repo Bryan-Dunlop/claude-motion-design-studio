@@ -1,7 +1,7 @@
 // Cursor panel: a click sound can be imported right there (no stray clip on the timeline).
 import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './app-audio-helpers';
-import { editor, setNumber, shortcut, toast } from './app-ui-helpers';
+import { editor, setNumber, setTime, shortcut, toast } from './app-ui-helpers';
 import { getState, layerOf, past } from './helpers';
 
 // A missing control fails fast instead of waiting for the whole test timeout.
@@ -63,4 +63,32 @@ test('Import sound… refuses a file that is not a sound, and changes nothing', 
   await toast(page, 'logo.png: pick a sound file (MP3, WAV, OGG, M4A, AAC or FLAC) to use as the click sound.');
   expect(await past(page)).toBe(h);
   expect((await getState(page)).project.assets).toEqual([]);
+});
+
+test('“+ Point / + Click at playhead” are disabled, saying why, while the playhead is outside the cursor layer', async ({ page }) => {
+  await page.goto('/');
+  await page.getByTestId('add-text').click();
+  await page.getByTestId('add-scene').click(); // Scene 2 at 7.5–15 s, selected
+  await page.getByTestId('add-cursor').click(); // in Scene 2: points at 0 and 1.2 s, a click at 1.4 s
+  const point = page.getByRole('button', { name: '+ Point at playhead' });
+  const click = page.getByRole('button', { name: '+ Click at playhead' });
+  const before = await cursor(page);
+
+  await setTime(page, 3); // in Scene 1
+  await expect(point).toBeDisabled();
+  await expect(click).toBeDisabled();
+  await expect(point).toHaveAttribute('title', 'The playhead (3.00 s) is outside Cursor (7.50–15.00 s). Move it inside the layer to add a point there.');
+  await expect(click).toHaveAttribute('title', 'The playhead (3.00 s) is outside Cursor (7.50–15.00 s). Move it inside the layer to add a click there.');
+  await expect(page.getByTestId('cursor-outside-help')).toBeVisible();
+  expect(await cursor(page)).toEqual(before);
+
+  // Inside the layer they add at the playhead (0.5 s into the layer).
+  await setTime(page, 8);
+  await expect(point).toBeEnabled();
+  await expect(page.getByTestId('cursor-outside-help')).toHaveCount(0);
+  await point.click();
+  await click.click();
+  const after = await cursor(page);
+  expect(after.points.map((p) => p.time)).toEqual([0, 0.5, 1.2]);
+  expect(after.clicks.map((c) => c.time)).toEqual([1.4, 0.5]);
 });

@@ -11,22 +11,29 @@ only when you click **Export MP4** (or run the CLI).
 
 ## Install
 
-You need **Node.js 20+** (tested with 22), **ffmpeg** on your PATH, and a desktop browser (Chrome or Edge recommended).
+You need **Node.js 20.6+** (tested with 22 and 24), **ffmpeg** on your PATH, and a desktop browser (Chrome or Edge
+recommended).
 
-### Windows 11, step by step
+### Windows 10 / 11, step by step
 
 1. Install Node.js LTS: `winget install OpenJS.NodeJS.LTS` (or download it from nodejs.org).
 2. Install ffmpeg: `winget install --id Gyan.FFmpeg`.
 3. **Close and reopen** your terminal so the new PATH is picked up.
-4. Check both: `node -v` should print v20 or higher, and `ffmpeg -version` should print a version banner.
-5. In the project folder, run `npm install`. This also downloads the headless Chromium build that export uses
-   (about 150 MB, one time).
-6. Run `npm run dev`.
-7. Open **http://127.0.0.1:5173** in Chrome or Edge.
+4. Check both: `node -v` should print v20.6 or higher, and `ffmpeg -version` should print a version banner.
+5. Get the code. On this repository's GitHub page click the green **Code** button → **Download ZIP**, right-click the
+   downloaded file → **Extract All…**, and move the extracted folder to a short path such as
+   `C:\Users\<you>\motion-studio`. That folder — the one with `package.json` directly inside it — is the **project
+   folder**. (With Git installed you can instead run `git clone <repository URL> C:\Users\<you>\motion-studio`, and later
+   update with `git pull`.)
+6. Go into it: `cd C:\Users\<you>\motion-studio` (check with `dir package.json`).
+7. Run `npm install`. This also downloads the headless Chromium build that export uses (about 150 MB, one time).
+8. Run `npm run dev`.
+9. Open **http://127.0.0.1:5173** in Chrome or Edge.
 
 ### macOS / Linux
 
 ```bash
+git clone <repository URL> motion-studio && cd motion-studio
 brew install ffmpeg        # or: sudo apt install ffmpeg
 npm install
 npm run dev                # → http://127.0.0.1:5173
